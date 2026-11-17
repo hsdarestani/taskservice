@@ -29,3 +29,11 @@ Urban Company and Justlife: navigation, approachable category cards. Airtasker: 
 - End-to-end test: submitted a fictional test ticket through the live wizard; verified new D1 row with status `new`, then deleted the QA ticket and confirmed zero rows remaining (ticket `TS-MWKQB87K-BBD46`). No real customer contact data used.
 - Cloudflare Access still protects the company dashboard; untrusted unauthenticated browser navigation to /admin returned login_required.
 - **Not yet production-ready:** add GDPR docs, confirm official company identity/services and permissioned staff access, implement verified Turnstile and rate limits, R2 file storage, notifications, and customer sign-in/tracking if needed.
+
+## 2026-11-17 customer portal and imagery follow-up
+- Implemented public guest request to private email-OTP customer portal journey with a post-submit login CTA.
+- Replaced line category icons with service-photo thumbnails matching the reference's image-first categories, and replaced bottom-nav symbols with filled two-tone SVG icons. All decorative arrow glyphs removed.
+- Fixed the broken garden image URL; six category photos, three service cards and hero are now served from same-origin `/media/*` routes with caching and an SVG fallback for upstream image failures.
+- Verified all ten visible image elements loaded in the live mobile browser screenshot; verified guest form could create a real D1 ticket, then deleted the synthetic QA ticket and verified the record was gone.
+- Unauthenticated requests to `/konto` and `/api/customer/tickets` were blocked by Cloudflare Access. **Email OTP end-to-end sign-in still needs a test with a real consenting test mailbox.**
+- R2 uploads and real GDPR legal pages, Turnstile, submission rate limiting, organization identity customization, and a final security review are required before taking real customer traffic.

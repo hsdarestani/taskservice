@@ -23,3 +23,9 @@ This is a **section-by-section reconstruction** of specific app screens, not a b
 - Automated form E2E test and admin login test need to be completed with an authenticated browser; do not claim these passed.
 - Add genuine legal docs, Turnstile, per-IP rate limiting, notification delivery, R2 before production use.
 - Frontend source is in frontend.html, and the same HTML is embedded as PAGE in worker.js for a dependency-free Worker deploy.
+
+## Iteration 2026-11-17: user screenshot defects
+- Removed all arrow-symbol icons in the consumer and company interfaces.
+- Category tiles now use actual service images rather than generic monochrome line glyphs. This preserves the Urban Company category-first reference layout but uses Pexels-licensed photographic substitutes instead of copying Urban Company's original illustrations.
+- Image sources are proxied through `/media/*`; gallery photos now use `8055202` (cleaning), `32588548` (repairs), `5027602` (garden), `20500461` (electrical), `31755424` (furniture), `27176670` (other), `27176671` (hero) from Pexels. Verify Pexels license and actual client branding before production.
+- Customer sign-in (`/konto`) uses Cloudflare Access email OTP and only exposes tickets belonging to the verified email.

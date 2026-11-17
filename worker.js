@@ -2,10 +2,29 @@ const PAGE="<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\"><meta
 const json=(v,s=200)=>new Response(JSON.stringify(v),{status:s,headers:{'content-type':'application/json;charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 const error=(m,s=400)=>json({error:m},s);
 const noCache={'content-type':'text/html;charset=utf-8','content-security-policy':"default-src 'self'; script-src 'unsafe-inline' 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",'referrer-policy':'strict-origin-when-cross-origin','x-frame-options':'DENY','x-content-type-options':'nosniff','cache-control':'no-store'};
-function adminAuthorized(req,env){const token=req.headers.get('Cf-Access-Jwt-Assertion');return !!(token&&env.ACCESS_AUD&&token.split('.').length===3)} 
+async function adminAuthorized(req,env){
+ const token=req.headers.get('Cf-Access-Jwt-Assertion');
+ if(!token||!env.ACCESS_AUD)return false;
+ try {
+  const parts=token.split('.');if(parts.length!==3)return false;
+  const decode=x=>Uint8Array.from(atob(x.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-x.length%4)%4)),c=>c.charCodeAt(0));
+  const header=JSON.parse(new TextDecoder().decode(decode(parts[0])));
+  const payload=JSON.parse(new TextDecoder().decode(decode(parts[1])));
+  const now=Math.floor(Date.now()/1000);
+  if(header.alg!=='RS256'||!header.kid||payload.iss!=='https://gsystem-pages.cloudflareaccess.com'||!Array.isArray(payload.aud)||!payload.aud.includes(env.ACCESS_AUD)||!payload.exp||payload.exp<=now||!payload.nbf||payload.nbf>now)return false;
+  const res=await fetch('https://gsystem-pages.cloudflareaccess.com/cdn-cgi/access/certs');
+  if(!res.ok)return false;
+  const certs=await res.json();
+  const key=certs.keys?.find(k=>k.kid===header.kid&&k.kty==='RSA');
+  if(!key)return false;
+  const imported=await crypto.subtle.importKey('jwk',key,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
+  return await crypto.subtle.verify('RSASSA-PKCS1-v1_5',imported,decode(parts[2]),new TextEncoder().encode(parts[0]+'.'+parts[1]));
+ } catch {return false;}
+}
 export default {async fetch(req,env){const url=new URL(req.url),path=url.pathname,method=req.method;
 try{
-if(path==='/'||path==='/admin'||path==='/admin/')return new Response(PAGE,{headers:noCache});
+if(path==='/admin'||path==='/admin/'){if(!await adminAuthorized(req,env))return error('Nicht autorisiert.',403);return new Response(PAGE,{headers:noCache});}
+if(path==='/')return new Response(PAGE,{headers:noCache});
 if(path==='/health')return json({ok:true,version:'mvp-1'});
 if(path==='/api/tickets'&&method==='POST'){
 if(Number(req.headers.get('content-length')||0)>1700000)return error('Anfrage zu groß.',413);
@@ -20,7 +39,7 @@ const ops=[env.DB.prepare('INSERT INTO tickets (id,name,email,phone,category,mes
 for(const f of imgs){const bytes=new Uint8Array(await f.arrayBuffer());let b='';for(let i=0;i<bytes.length;i+=8192)b+=String.fromCharCode(...bytes.slice(i,i+8192));ops.push(env.DB.prepare('INSERT INTO attachments (id,ticket_id,filename,mime,body) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),id,f.name.slice(0,100),f.type,btoa(b)));}
 await env.DB.batch(ops);return json({id},201)}
 if(path.startsWith('/api/admin/') ){
-if(!adminAuthorized(req,env))return error('Nicht autorisiert.',403);
+if(!await adminAuthorized(req,env))return error('Nicht autorisiert.',403);
 if(path==='/api/admin/tickets'&&method==='GET'){const d=await env.DB.prepare('SELECT id,name,email,phone,category,message,status,created_at,updated_at FROM tickets ORDER BY created_at DESC LIMIT 200').all();return json({tickets:d.results})}
 const attachment=path.match(/^\/api\/admin\/attachments\/([a-f0-9-]+)$/);
 if(attachment&&method==='GET'){const f=await env.DB.prepare('SELECT filename,mime,body FROM attachments WHERE id=?').bind(attachment[1]).first();if(!f)return error('Nicht gefunden',404);const raw=atob(f.body);const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));return new Response(bytes,{headers:{'content-type':f.mime,'content-disposition':'inline; filename="photo"','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"}})}

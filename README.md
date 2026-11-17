@@ -19,3 +19,13 @@ To deploy from CLI, upload worker.js as an ES module with binding DB of type d1 
 
 ## Design references
 Urban Company and Justlife: navigation, approachable category cards. Airtasker: lightweight request journey. Thumbtack: clean professional typography and content hierarchy.
+
+## Design-rebuild verification (2026-11-17)
+
+- Replaced the custom green/cream landing UI with a screenshot-guided Urban Company three-column category layout and a split-blue CTA banner.
+- Rebuilt the Justlife-style horizontal image-service row, and an Airtasker-style three-step guest ticket submission flow.
+- Source-to-section screenshot mapping in [DESIGN_REFERENCES.md](DESIGN_REFERENCES.md).
+- Cloudflare Browser Rendering: validated the new mobile category layout and wizard step 1 at 390×844.
+- End-to-end test: submitted a fictional test ticket through the live wizard; verified new D1 row with status `new`, then deleted the QA ticket and confirmed zero rows remaining (ticket `TS-MWKQB87K-BBD46`). No real customer contact data used.
+- Cloudflare Access still protects the company dashboard; untrusted unauthenticated browser navigation to /admin returned login_required.
+- **Not yet production-ready:** add GDPR docs, confirm official company identity/services and permissioned staff access, implement verified Turnstile and rate limits, R2 file storage, notifications, and customer sign-in/tracking if needed.

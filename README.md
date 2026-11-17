@@ -6,7 +6,7 @@ Mobile-first German service request web app (inspired by Urban Company, Justlife
 Cloudflare Worker + D1 EU jurisdiction; the Worker serves the customer UI and the company desk at /admin. Repository intentionally has no build dependencies.
 
 ## Security and production blockers
-- Cloudflare Access must protect /admin and /api/admin/*; Worker also expects a verified access identity, not a public endpoint. **Do not rely on presence of an unverified JWT**. Before production, replace the current header-presence check with Cloudflare Access JWT verification against JWKS/aud or configure an internal service-only auth boundary.
+- Cloudflare Access protects /admin and /api/admin/* with a single-account allowlist; Worker independently verifies RS256 JWT using the Cloudflare Access JWKS and audience. Extend admin identity policies when company staff are approved.
 - R2 is disabled in this Cloudflare account. Images are temporarily stored privately as base64 in D1, capped at 3 x 350 KB. Move to private R2 before scale.
 - Add real Impressum and Datenschutzerklärung and an approved retention/deletion policy before collecting actual customer data.
 - Add Turnstile (verified server-side), rate limiting, email confirmation, notifications, customer authentication/tracking, and a robust anti-abuse strategy before launch.

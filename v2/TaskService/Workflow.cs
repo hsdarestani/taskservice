@@ -1,0 +1,51 @@
+using System.Text.Json;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
+using TaskService.Database;
+
+namespace TaskService;
+
+public static class Workflow
+{
+    public static IReadOnlyList<string> Actions(ServiceRequest request, Actor actor)
+    {
+        var owns = actor.Key != Actor.Guest.Key && actor.Key == request.CustomerKey;
+        var assigned = actor.IsTechnician && actor.Membership!.Id == request.TechnicianId;
+        return request.State switch
+        {
+            "verified" when actor.IsCompany => ["triage", "cancel"],
+            "triage" when actor.IsCompany => ["request_information", "assign", "cancel"],
+            "assigned" when actor.IsCompany => ["request_information", "assign", "schedule", "cancel"],
+            "scheduled" when actor.IsCompany => ["assign", "schedule", "start", "cancel"],
+            "scheduled" when assigned => ["start", "arrival"],
+            "in_progress" when actor.IsCompany => ["complete", "cancel"],
+            "awaiting_customer" when actor.IsCompany || owns => ["resume"],
+            "completed" or "cancelled" when actor.IsCompany => ["reopen"],
+            _ => []
+        };
+    }
+
+    public static string CustomerState(string state) => state switch
+    {
+        "received" or "verified" => "received",
+        "triage" or "assigned" => "under_review",
+        _ => state
+    };
+
+    public static void Record(ServiceDb db, ServiceRequest request, Actor actor, string action)
+    {
+        var now = DateTimeOffset.UtcNow;
+        db.History.Add(new(request.TenantId, request.Id, request.Revision, request.State, now));
+        db.Audit.Add(new(request.TenantId, Guid.NewGuid(), actor.Key, action, request.Id, now));
+    }
+
+    public static void QueueMail(ServiceDb db, Guid tenant, IDataProtectionProvider provider, string to,
+        string subject, string content)
+    {
+        var payload = JsonSerializer.Serialize(new MailPayload(to, subject, content));
+        var secured = provider.CreateProtector("taskservice-outbox-mail-v1").Protect(payload);
+        db.Outbox.Add(new(tenant, Guid.NewGuid(), "mail", secured, DateTimeOffset.UtcNow));
+    }
+}
+
+public sealed record MailPayload(string To, string Subject, string Content);

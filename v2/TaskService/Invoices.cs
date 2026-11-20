@@ -210,7 +210,7 @@ public static partial class Endpoints
         switch (body.Action)
         {
             case "approve" or "reject":
-                if (body.Action == "reject" && !ReportText(body.Reason, 500))
+                if (body.Action == "reject" && !ValidMultilineText(body.Reason, 500))
                     return ApiProblem.Error(422, "missing_review_reason", "Bitte begründen Sie die Rückgabe.");
                 current.Status = body.Action == "approve" ? "approved" : "rejected";
                 current.ReviewerId = actor.Membership!.Id;

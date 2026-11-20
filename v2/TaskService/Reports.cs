@@ -109,9 +109,9 @@ public static partial class Endpoints
         {
             case "submit":
                 if (body.Activities is not { Length: >= 1 and <= 12 } activities ||
-                    activities.Any(x => x is null || !ReportText(x.Description, 240) || x.Minutes is < 1 or > 1440) ||
-                    activities.Sum(x => x!.Minutes) > 10080 || !ReportText(body.Result, 3000) ||
-                    (!string.IsNullOrWhiteSpace(body.Materials) && !ReportText(body.Materials, 2000)))
+                    activities.Any(x => x is null || !ValidMultilineText(x.Description, 240) || x.Minutes is < 1 or > 1440) ||
+                    activities.Sum(x => x!.Minutes) > 10080 || !ValidMultilineText(body.Result, 3000) ||
+                    (!string.IsNullOrWhiteSpace(body.Materials) && !ValidMultilineText(body.Materials, 2000)))
                     return ApiProblem.Error(422, "invalid_report", "Bitte prüfen Sie Tätigkeiten, Dauer, Ergebnis und Material.");
                 if (report is null)
                 {
@@ -129,7 +129,7 @@ public static partial class Endpoints
                     body.Result!.Trim(), string.IsNullOrWhiteSpace(body.Materials) ? null : body.Materials.Trim(), now));
                 break;
             case "approve" or "reject":
-                if (body.Action == "reject" && !ReportText(body.Reason, 500))
+                if (body.Action == "reject" && !ValidMultilineText(body.Reason, 500))
                     return ApiProblem.Error(422, "missing_review_reason", "Bitte begründen Sie die Rückgabe.");
                 current!.Status = body.Action == "approve" ? "approved" : "rejected";
                 current.ReviewerId = actor.Membership!.Id;
@@ -242,8 +242,6 @@ public static partial class Endpoints
     private static ValueTask<ReportVersion?> FindReportVersion(ServiceDb db, Report report, int version, CancellationToken ct) =>
         db.ReportVersions.FindAsync([report.TenantId, report.RequestId, version], ct);
 
-    private static bool ReportText(string? value, int maximum) =>
-        Valid(value, maximum) && !value!.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t'));
 }
 
 public sealed record ReportActivity(string Description, int Minutes);

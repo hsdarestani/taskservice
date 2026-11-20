@@ -1,5 +1,7 @@
 """Exercise the report workflow against a disposable V2 app served by the .NET test assembly."""
 import os
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from time import monotonic, sleep
 from pathlib import Path
 
@@ -14,7 +16,10 @@ output = Path(os.environ.get("TASKSERVICE_BROWSER_OUTPUT", "."))
 output.mkdir(parents=True, exist_ok=True)
 
 with sync_playwright() as playwright:
-    browser = playwright.chromium.launch(executable_path=os.environ.get("TASKSERVICE_CHROMIUM"), args=["--no-sandbox"])
+    browser = playwright.chromium.launch(
+        executable_path=os.environ.get("TASKSERVICE_CHROMIUM"),
+        args=["--no-sandbox", "--ignore-certificate-errors"],
+    )
 
     def open_as(subject, privileged=False, mobile=False):
         headers = {"X-Test-Subject": subject}
@@ -26,12 +31,45 @@ with sync_playwright() as playwright:
             extra_http_headers=headers,
         )
         page = context.new_page()
+        page.set_default_timeout(10000)
         page.goto(origin + path, wait_until="domcontentloaded")
         panel = page.locator("section").filter(has=page.get_by_role("heading", name="Arbeitsbericht", exact=True))
         expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel
 
+    def send_request_command(page, action, button_name="Änderung speichern"):
+        commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
+        commands.get_by_label("Aktion", exact=True).select_option(action)
+        with page.expect_response(lambda r: r.url.endswith("/commands") and "/report/" not in r.url) as response:
+            commands.get_by_role("button", name=button_name, exact=True).click()
+        assert response.value.ok, (response.value.status, response.value.text())
+
+    context, page, panel = open_as("admin-a", privileged=True)
+    commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
+    commands.get_by_label("Aktion", exact=True).select_option("schedule")
+    day = (datetime.now(ZoneInfo("Europe/Berlin")) + timedelta(days=4)).date()
+    commands.get_by_label("Beginn (Berliner Zeit)").fill(f"{day}T09:00")
+    commands.get_by_label("Ende (Berliner Zeit)").fill(f"{day}T10:00")
+    commands.get_by_label("Hinweis für den Kunden").fill("Bitte den Eingang freihalten.")
+    send_request_command(page, "schedule")
+    expect(page.get_by_text("Bitte den Eingang freihalten.", exact=True)).to_be_visible()
+    context.close()
+
+    context, page, panel = open_as("customer-a", mobile=True)
+    send_request_command(page, "confirm_appointment", "Termin bestätigen")
+    expect(page.get_by_text("Bestätigt am", exact=False)).to_be_visible()
+    page.locator("section").filter(has=page.get_by_role("heading", name="Einsatztermin", exact=True)).screenshot(
+        path=output / "appointment-customer-mobile.png"
+    )
+    context.close()
+
     context, page, panel = open_as("tech-a", mobile=True)
+    commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
+    commands.get_by_label("Aktion", exact=True).select_option("arrival")
+    commands.get_by_label("Anfahrt").select_option("arrived")
+    send_request_command(page, "arrival")
+    expect(page.get_by_text("Vor Ort", exact=True)).to_be_visible()
+    send_request_command(page, "start")
     panel.get_by_label("Tätigkeit 1").fill("Gerät geprüft und Dichtung gewechselt")
     panel.get_by_label("Dauer in Minuten").fill("45")
     panel.get_by_label("Ergebnis").fill("Gerät funktioniert wieder.")
@@ -76,7 +114,30 @@ with sync_playwright() as playwright:
     response = context.request.get(origin + download.get_attribute("href"))
     assert response.ok and response.body().startswith(b"%PDF-")
     assert response.headers["cache-control"] == "no-store"
+    manifest_url = page.locator('link[rel="manifest"]').get_attribute("href")
+    manifest = context.request.get(origin + manifest_url)
+    assert manifest.ok and manifest.json()["start_url"] == "/unternehmen/lab"
+    deadline = monotonic() + 8
+    while not page.evaluate("navigator.serviceWorker.controller !== null") and monotonic() < deadline:
+        sleep(0.2)
+    if not page.evaluate("navigator.serviceWorker.controller !== null"):
+        diagnostic = page.evaluate("""async () => {
+            try {
+                const registration = await navigator.serviceWorker.register('/sw.js');
+                return registration.active?.state ?? registration.installing?.state ?? 'Waiting';
+            } catch (error) { return error.message; }
+        }""")
+        raise AssertionError(f"The TaskService service worker did not activate: {diagnostic}")
+    context.set_offline(True)
+    page.reload(wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Keine Internetverbindung")).to_be_visible()
+    cached = page.evaluate("""async () => {
+        const entries = await Promise.all((await caches.keys()).map(async key => (await (await caches.open(key)).keys()).map(r => new URL(r.url).pathname)));
+        return entries.flat();
+    }""")
+    assert "/offline.html" in cached
+    assert not any(p.startswith(("/api/", "/unternehmen/", "/hubs/")) for p in cached)
     context.close()
     browser.close()
 
-print("Report browser test passed for technician, reviewer, publisher and customer.")
+print("Appointment scheduling, customer confirmation, technician status, report review and customer download passed in browser.")

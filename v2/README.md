@@ -41,7 +41,13 @@ Staff get explicit per-membership grants from `ts.invoice_permissions`. A techni
 
 The original is uploaded to a tenant-scoped quarantine. `ClamAv__Host` and `ClamAv__Port` must point to a private clamd instance with up-to-date official signatures, `StreamMaxLength` of at least 10 MiB and blocking alerts on encrypted content or scan limits. A scanner error leaves the file blocked, with retry and eventual failure. After a clean result, a different employee reviews the original. Publication has its own permission and is bound to the verified customer and exact version. Revocation stops customer downloads. A customer who can download receives the original bytes with no intermediary transformation.
 
-CI runs the invoice browser workflow with controlled scan verdicts, as well as a TCP framing test. An isolated scanner test can use `TASKSERVICE_TEST_CLAMAV_PORT` on loopback with a synthetic signature for `TASKSERVICE-QA-SCAN-MARKER`. Set `TASKSERVICE_INVOICE_BROWSER` to the absolute path to `v2/tests/invoice_browser.py` to also drive the UI. This fixture does not validate production signature updates or production data handling.
+CI runs the invoice browser workflow with controlled scan verdicts, as well as a TCP framing test. An isolated scanner test can use `TASKSERVICE_TEST_CLAMAV_PORT` on loopback with a synthetic signature for `TASKSERVICE-QA-SCAN-MARKER`. Set `TASKSERVICE_INVOICE_BROWSER` to the absolute path to `v2/tests/invoice_browser.py` to also drive the UI. Production signature updates and production data handling remain release checks.
+
+## Appointments and offline access
+
+Dispatch can use explicit offset timestamps or local Berlin times. Ambiguous clock hours accept an earlier or later occurrence. A customer confirms their current appointment window and can see its update time and the note released by dispatch. Rescheduling keeps the old slot in history and requires a new confirmation. Reopening records an internal reason.
+
+The installed web app can open a company-specific portal using its manifest. The service worker caches the generic offline page and fingerprinted frontend assets. Authenticated pages, API responses, chat and private files use network access. The browser acceptance suite checks offline navigation and inspects cached paths.
 
 ## Production boundary
 

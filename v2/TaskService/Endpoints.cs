@@ -17,6 +17,7 @@ public static partial class Endpoints
     {
         var group = app.MapGroup("/api/v1/tenants/{slug}").AddEndpointFilter<CsrfFilter>();
         group.MapGet("", TenantView);
+        group.MapGet("/manifest.webmanifest", TenantManifest);
         group.MapGet("/requests", Requests);
         group.MapGet("/requests/{id:guid}", Request);
         group.MapPost("/requests", Submit).RequireRateLimiting("guest");
@@ -34,6 +35,29 @@ public static partial class Endpoints
         slug.Length <= 63
             ? await db.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Slug == slug && x.Active, ct)
             : null;
+
+    private static async Task<IResult> TenantManifest(ServiceDb db, string slug, CancellationToken ct)
+    {
+        if (await FindTenant(db, slug, ct) is not { } tenant)
+            return ApiProblem.NotFound();
+        var entry = $"/unternehmen/{tenant.Slug}";
+        return Results.Json(new
+        {
+            id = entry,
+            name = tenant.Name,
+            short_name = tenant.Name,
+            lang = "de",
+            start_url = entry,
+            scope = "/",
+            display = "standalone",
+            background_color = "#faf9f6",
+            theme_color = tenant.Accent,
+            icons = new[] { 192, 512 }.Select(size => new
+            {
+                src = $"/icons/taskservice-{size}.png", sizes = $"{size}x{size}", type = "image/png", purpose = "any maskable"
+            })
+        }, contentType: "application/manifest+json");
+    }
 
     private static async Task<IResult> TenantView(ServiceDb db, string slug, HttpContext http, CancellationToken ct)
     {
@@ -74,12 +98,14 @@ public static partial class Endpoints
         if (cursor is { } id)
             query = query.Where(x => x.Id.CompareTo(id) > 0);
         var rows = await query.OrderBy(x => x.Id).Take(51)
-            .Select(x => new { x.Id, x.Title, x.State, x.Revision, x.CreatedAt }).ToListAsync(ct);
+            .Select(x => new { x.Id, x.Title, x.State, x.Revision, x.CreatedAt, x.TechnicianId }).ToListAsync(ct);
         return Results.Ok(new
         {
             items = rows.Take(50).Select(x => new
             {
-                x.Id, x.Title, State = actor.Membership is not null && view != "mine" ? x.State : Workflow.CustomerState(x.State),
+                x.Id, x.Title,
+                State = view != "mine" && (actor.IsCompany || actor.IsTechnician && actor.Membership!.Id == x.TechnicianId)
+                    ? x.State : Workflow.CustomerState(x.State),
                 x.Revision, x.CreatedAt
             }),
             nextCursor = rows.Count > 50 ? rows[49].Id : (Guid?)null
@@ -94,20 +120,29 @@ public static partial class Endpoints
         var actor = await Actor.Read(db, tenant, http, ct);
         if (await FindRequest(db, tenant, id, ct) is not { } request || !actor.CanRead(request))
             return ApiProblem.NotFound();
-        var staff = actor.Membership is not null;
+        var staff = actor.IsCompany || actor.IsTechnician && actor.Membership!.Id == request.TechnicianId;
         var history = await db.History.AsNoTracking().Where(x => x.TenantId == tenant.Id && x.RequestId == id)
-            .OrderBy(x => x.Revision).Select(x => new { x.State, x.At }).ToListAsync(ct);
-        var appointment = await db.Appointments.AsNoTracking().Where(x => x.TenantId == tenant.Id && x.RequestId == id && !x.Cancelled)
-            .Select(x => new { x.StartsAt, x.EndsAt, x.ArrivalStatus }).SingleOrDefaultAsync(ct);
+            .OrderBy(x => x.Revision).Select(x => new { x.State, x.At, x.PrivateNote }).ToListAsync(ct);
+        var appointment = await db.Appointments.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.RequestId == id && !x.Cancelled, ct);
         http.Response.Headers.ETag = Tag(request.Revision);
         return Results.Ok(new
         {
             request.Id, request.Title, request.Description, request.CreatedAt, request.Revision,
             State = staff ? request.State : Workflow.CustomerState(request.State),
             TechnicianId = staff ? request.TechnicianId : null,
-            History = history.Select(x => new { State = staff ? x.State : Workflow.CustomerState(x.State), x.At }),
-            Appointment = appointment,
-            Actions = Workflow.Actions(request, actor)
+            CanReadInternal = staff,
+            History = history.Select(x => new
+            {
+                State = staff ? x.State : Workflow.CustomerState(x.State), x.At,
+                PrivateNote = actor.IsCompany ? x.PrivateNote : null
+            }),
+            Appointment = appointment is null ? null : new
+            {
+                appointment.StartsAt, appointment.EndsAt, appointment.ArrivalStatus, appointment.TimeZone,
+                appointment.UpdatedAt, appointment.CustomerConfirmedAt, appointment.CustomerNote
+            },
+            Actions = Workflow.Actions(request, actor, appointment)
         });
     }
 
@@ -211,17 +246,16 @@ public static partial class Endpoints
         {
             // State-changing retries still require a current write privilege on the resource.
             if (!(actor.IsCompany || actor.IsTechnician && actor.Membership!.Id == request.TechnicianId ||
-                body.Action == "resume" && request.CustomerKey == actor.Key))
+                (body.Action is "resume" or "confirm_appointment") && request.CustomerKey == actor.Key))
                 return ApiProblem.Denied();
             return Replay(http, previous, fingerprint);
         }
         if (tag != Tag(request.Revision))
             return ApiProblem.Error(412, "stale_revision", "Der Vorgang wurde inzwischen geändert.");
-        if (!Workflow.Actions(request, actor).Contains(body.Action))
-            return ApiProblem.Error(409, "invalid_transition", "Diese Änderung ist im aktuellen Zustand nicht möglich.");
-
         var appointment = await db.Appointments.SingleOrDefaultAsync(x =>
             x.TenantId == tenant.Id && x.RequestId == id && !x.Cancelled, ct);
+        if (!Workflow.Actions(request, actor, appointment).Contains(body.Action))
+            return ApiProblem.Error(409, "invalid_transition", "Diese Änderung ist im aktuellen Zustand nicht möglich.");
         switch (body.Action)
         {
             case "triage": request.State = "triage"; break;
@@ -243,9 +277,13 @@ public static partial class Endpoints
                 request.State = "assigned";
                 break;
             case "schedule":
-                if (body.StartsAt is not { } starts || body.EndsAt is not { } ends ||
+                var useBerlin = body.StartsAtLocal is not null || body.EndsAtLocal is not null;
+                var startSlot = useBerlin ? Workflow.ResolveBerlinSlot(body.StartsAtLocal, body.StartsAtFold) : body.StartsAt;
+                var endSlot = useBerlin ? Workflow.ResolveBerlinSlot(body.EndsAtLocal, body.EndsAtFold) : body.EndsAt;
+                if (startSlot is not { } starts || endSlot is not { } ends ||
                     starts <= DateTimeOffset.UtcNow || ends <= starts || ends - starts > TimeSpan.FromDays(1))
-                    return ApiProblem.Error(422, "invalid_slot", "Bitte wählen Sie ein gültiges zukünftiges Zeitfenster.");
+                    return ApiProblem.Error(422, "invalid_slot",
+                        "Wählen Sie ein gültiges zukünftiges Zeitfenster. Bei der Zeitumstellung geben Sie bei doppelten Uhrzeiten die erste oder zweite Stunde an.");
                 // Keep same-technician writers ordered in addition to the database exclusion constraint.
                 await Lock(db, $"{tenant.Id}:technician:{request.TechnicianId}", ct);
                 if (appointment is not null)
@@ -253,14 +291,31 @@ public static partial class Endpoints
                     appointment.Cancelled = true;
                     await db.SaveChangesAsync(ct);
                 }
+                if (body.Note is { Length: > 0 } && !ValidMultilineText(body.Note, 500))
+                    return ApiProblem.Error(422, "invalid_appointment_note", "Der Terminhinweis darf höchstens 500 Zeichen umfassen.");
                 db.Appointments.Add(new(tenant.Id, Guid.NewGuid(), id, request.TechnicianId!.Value,
-                    starts.ToUniversalTime(), ends.ToUniversalTime()));
+                    starts.ToUniversalTime(), ends.ToUniversalTime())
+                {
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    CustomerNote = body.Note?.Trim()
+                });
                 request.State = "scheduled";
                 break;
             case "arrival":
                 if (appointment is null || body.ArrivalStatus is not ("departed" or "delayed" or "arrived"))
                     return ApiProblem.Error(422, "invalid_arrival", "Bitte wählen Sie einen gültigen Einsatzstatus.");
                 appointment.ArrivalStatus = body.ArrivalStatus;
+                appointment.UpdatedAt = DateTimeOffset.UtcNow;
+                break;
+            case "appointment_note":
+                if (appointment is null || body.Note is { Length: > 0 } && !ValidMultilineText(body.Note, 500))
+                    return ApiProblem.Error(422, "invalid_appointment_note", "Der Terminhinweis darf höchstens 500 Zeichen umfassen.");
+                appointment.CustomerNote = body.Note?.Trim();
+                appointment.UpdatedAt = DateTimeOffset.UtcNow;
+                break;
+            case "confirm_appointment":
+                appointment!.CustomerConfirmedAt = DateTimeOffset.UtcNow;
+                appointment.UpdatedAt = appointment.CustomerConfirmedAt;
                 break;
             case "start": request.State = "in_progress"; break;
             case "complete":
@@ -271,6 +326,8 @@ public static partial class Endpoints
                 break;
             case "cancel":
             case "reopen":
+                if (body.Action == "reopen" && !ValidMultilineText(body.Note, 500))
+                    return ApiProblem.Error(422, "missing_reopen_reason", "Bitte geben Sie einen Grund für die Wiedereröffnung an.");
                 if (appointment is not null)
                     appointment.Cancelled = true;
                 request.State = body.Action == "cancel" ? "cancelled" : "triage";
@@ -280,7 +337,7 @@ public static partial class Endpoints
         }
 
         request.Revision++;
-        Workflow.Record(db, request, actor, $"request.{body.Action}");
+        Workflow.Record(db, request, actor, $"request.{body.Action}", body.Action == "reopen" ? body.Note!.Trim() : null);
         if (request.CustomerKey is not null && body.Action is "schedule" or "assign" or "cancel" &&
             Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) && publicBase.Scheme == "https" &&
             !string.IsNullOrWhiteSpace(config["Mail:Host"]))
@@ -377,6 +434,9 @@ public static partial class Endpoints
     private static bool Valid(string? value, int maximum) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximum && !value.Contains('\0');
 
+    private static bool ValidMultilineText(string? value, int maximum) =>
+        Valid(value, maximum) && !value!.Any(c => char.IsControl(c) && c is not ('\r' or '\n' or '\t'));
+
     private static string Tag(int revision) => $"\"r{revision.ToString(CultureInfo.InvariantCulture)}\"";
 
     private static IResult Replay(HttpContext http, Command previous, byte[] fingerprint)
@@ -394,5 +454,6 @@ public static partial class Endpoints
 public sealed record NewRequest(string Title, string Description, string Email);
 public sealed record ClaimBody(string Token);
 public sealed record RequestCommand(string Action, Guid? TechnicianId, DateTimeOffset? StartsAt,
-    DateTimeOffset? EndsAt, string? ArrivalStatus);
+    DateTimeOffset? EndsAt, string? ArrivalStatus, string? StartsAtLocal, string? EndsAtLocal, string? StartsAtFold,
+    string? EndsAtFold, string? Note);
 public sealed record NewMessage(string Body);

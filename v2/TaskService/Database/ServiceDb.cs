@@ -84,8 +84,15 @@ public sealed record Appointment(Guid TenantId, Guid Id, Guid RequestId, Guid Te
 {
     public bool Cancelled { get; set; }
     public string ArrivalStatus { get; set; } = "planned";
+    public string TimeZone { get; init; } = "Europe/Berlin";
+    public DateTimeOffset? UpdatedAt { get; set; }
+    public DateTimeOffset? CustomerConfirmedAt { get; set; }
+    public string? CustomerNote { get; set; }
 }
-public sealed record History(Guid TenantId, Guid RequestId, int Revision, string State, DateTimeOffset At);
+public sealed record History(Guid TenantId, Guid RequestId, int Revision, string State, DateTimeOffset At)
+{
+    public string? PrivateNote { get; init; }
+}
 public sealed record Message(Guid TenantId, Guid? RequestId, string Channel, string Author, string Body, DateTimeOffset SentAt)
 {
     public long Sequence { get; set; }

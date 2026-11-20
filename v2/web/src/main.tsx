@@ -17,6 +17,7 @@ const actions: Record<string, string> = {
   triage: 'Prüfung beginnen', request_information: 'Rückfrage vormerken', assign: 'Fachkraft zuweisen',
   schedule: 'Termin speichern', start: 'Einsatz beginnen', complete: 'Abschließen',
   cancel: 'Stornieren', reopen: 'Wieder öffnen', resume: 'Vorgang fortsetzen', arrival: 'Anfahrt melden',
+  confirm_appointment: 'Termin bestätigen', appointment_note: 'Terminhinweis ändern',
 };
 const date = (value: string) => new Intl.DateTimeFormat('de-DE', {
   dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin',
@@ -91,7 +92,7 @@ function App() {
         {requestId && path[4] === 'bestaetigen'
           ? <ClaimRequest session={session.data} id={requestId}/>
           : requestId
-            ? <RequestDetail session={session.data} id={requestId} company={company.data}/>
+            ? <RequestDetail session={session.data} id={requestId}/>
             : <Dashboard company={company.data} session={session.data} portal={portal}/>}
       </>}
     </main>
@@ -191,7 +192,7 @@ function ClaimRequest({ session, id }: { session: Session; id: string }) {
   </Panel>;
 }
 
-function RequestDetail({ session, id, company }: { session: Session; id: string; company: Company }) {
+function RequestDetail({ session, id }: { session: Session; id: string }) {
   const [revision, setRevision] = useState(0);
   const detail = useLoad<Detail>(session.signedIn ? api + '/requests/' + id : undefined, revision);
   const row = detail.data;
@@ -203,16 +204,21 @@ function RequestDetail({ session, id, company }: { session: Session; id: string;
       <Panel><h2>Beschreibung</h2><p className="preserve">{row.description}</p>
         {row.appointment && <><h2>Einsatztermin</h2>
           <p>{date(row.appointment.startsAt)} bis {date(row.appointment.endsAt)} Uhr (Berlin)</p>
-          <Badge state={row.appointment.arrivalStatus}/></>}
+          <Badge state={row.appointment.arrivalStatus}/>
+          {row.appointment.customerConfirmedAt && <small>Bestätigt am {date(row.appointment.customerConfirmedAt)}</small>}
+          {row.appointment.updatedAt && <small>Aktualisiert am {date(row.appointment.updatedAt)}</small>}
+          {row.appointment.customerNote && <p className="preserve">{row.appointment.customerNote}</p>}</>}
       </Panel>
       <Panel><h2>Verlauf</h2><ol className="history">{row.history.map((x, i) =>
-        <li key={i}><strong>{states[x.state] || x.state}</strong><small>{date(x.at)}</small></li>)}</ol></Panel>
+        <li key={i}><strong>{states[x.state] || x.state}</strong><small>{date(x.at)}</small>
+          {x.privateNote && <p className="preserve">{x.privateNote}</p>}
+        </li>)}</ol></Panel>
     </div>
     {row.actions.length > 0 && <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(x => x + 1)}/>}
     <ReportPanel id={id} session={session}/>
     <InvoicesPanel id={id} session={session}/>
     <Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/>
-    {company.role && <Chat session={session} id={id} channel="internal" title="Interne Notizen"/>}
+    {row.canReadInternal && <Chat session={session} id={id} channel="internal" title="Interne Notizen"/>}
   </>;
 }
 
@@ -424,29 +430,47 @@ function Commands({ row, session, refresh }: { row: Detail; session: Session; re
     if (action === 'arrival') body.arrivalStatus = String(data.get('arrivalStatus'));
     try {
       if (action === 'schedule') {
-        body.startsAt = new Date(String(data.get('startsAt'))).toISOString();
-        body.endsAt = new Date(String(data.get('endsAt'))).toISOString();
+        body.startsAtLocal = String(data.get('startsAt'));
+        body.endsAtLocal = String(data.get('endsAt'));
+        body.startsAtFold = String(data.get('startsAtFold'));
+        body.endsAtFold = String(data.get('endsAtFold'));
       }
+      if (data.has('note')) body.note = String(data.get('note'));
       await send(api + '/requests/' + row.id + '/commands', body, session.csrfToken, crypto.randomUUID(), row.revision); refresh(); }
     catch (x) { setError((x as Error).message); }
     finally { setBusy(false); }
   }
   return <Panel><h2>Vorgang bearbeiten</h2><form onSubmit={submit}>
-    <label>Aktion<select value={action} onChange={e => setAction(e.target.value)}>
+    <label>Aktion<select aria-label="Aktion" value={action} onChange={e => setAction(e.target.value)}>
       {row.actions.map(key => <option key={key} value={key}>{actions[key]}</option>)}
     </select></label>
     {action === 'assign' && <label>Fachkraft<select name="technicianId" required>
       <option value="">Bitte wählen</option>
       {technicians.data?.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
     </select></label>}
-    {action === 'schedule' && <div className="columns">
-      <label>Beginn (Gerätezeit)<input name="startsAt" type="datetime-local" required/></label>
-      <label>Ende (Gerätezeit)<input name="endsAt" type="datetime-local" required/></label>
-    </div>}
-    {action === 'arrival' && <label>Anfahrt<select name="arrivalStatus">
+    {action === 'schedule' && <>
+      <div className="columns">
+        <label>Beginn (Berliner Zeit)<input name="startsAt" type="datetime-local" required/></label>
+        <label>Ende (Berliner Zeit)<input name="endsAt" type="datetime-local" required/></label>
+      </div>
+      <details><summary>Falls eine Uhrzeit durch die Zeitumstellung doppelt vorkommt</summary>
+        <div className="columns">
+          <label>Beginn<select name="startsAtFold"><option value="">Keine Auswahl</option>
+            <option value="earlier">Erste Stunde</option><option value="later">Zweite Stunde</option>
+          </select></label>
+          <label>Ende<select name="endsAtFold"><option value="">Keine Auswahl</option>
+            <option value="earlier">Erste Stunde</option><option value="later">Zweite Stunde</option>
+          </select></label>
+        </div>
+      </details>
+    </>}
+    {(action === 'schedule' || action === 'appointment_note') && <label>Hinweis für den Kunden<textarea name="note"
+      maxLength={500} rows={2} defaultValue={row.appointment?.customerNote}/></label>}
+    {action === 'reopen' && <label>Interner Grund für die Wiedereröffnung<textarea name="note" required maxLength={500} rows={2}/></label>}
+    {action === 'arrival' && <label>Anfahrt<select aria-label="Anfahrt" name="arrivalStatus">
       <option value="departed">Unterwegs</option><option value="delayed">Verspätet</option><option value="arrived">Vor Ort</option>
     </select></label>}
-    <button className="primary" disabled={busy}>Änderung speichern</button><Notice text={error || technicians.error}/>
+    <button className="primary" disabled={busy}>{action === 'confirm_appointment' ? 'Termin bestätigen' : 'Änderung speichern'}</button><Notice text={error || technicians.error}/>
   </form></Panel>;
 }
 
@@ -510,4 +534,9 @@ function Chat({ session, id, channel, title }: { session: Session; id?: string; 
   </Panel>;
 }
 
+if (slug && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))
+  document.querySelector<HTMLLinkElement>('link[rel="manifest"]')!.href = api + '/manifest.webmanifest';
+
 createRoot(document.getElementById('root')!).render(<App/>);
+if ('serviceWorker' in navigator)
+  void navigator.serviceWorker.register('/sw.js').catch(() => { /* Online access remains available. */ });

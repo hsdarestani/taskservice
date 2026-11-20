@@ -3,9 +3,13 @@ export type Company = { slug: string; name: string; accent: string; role?: strin
 export type RequestRow = { id: string; title: string; state: string; revision: number; createdAt: string };
 export type Detail = RequestRow & {
   description: string;
-  appointment?: { startsAt: string; endsAt: string; arrivalStatus: string };
+  canReadInternal: boolean;
+  appointment?: {
+    startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;
+    updatedAt?: string; customerConfirmedAt?: string; customerNote?: string;
+  };
   actions: string[];
-  history: { state: string; at: string }[];
+  history: { state: string; at: string; privateNote?: string }[];
 };
 export type Message = { sequence: number; author: string; body: string; sentAt: string };
 export type ReportView = {

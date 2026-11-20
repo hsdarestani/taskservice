@@ -133,6 +133,69 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public async Task OnlyAssignedCustomerCanConfirmCurrentWindowAndReschedulingClearsConfirmation()
+    {
+        using var staff = lab.Client("admin-a", mfa: true);
+        using var customer = lab.Client("customer-a");
+        using var otherCustomer = lab.Client("customer-b");
+        using var technician = lab.Client("tech-a");
+        var id = await lab.Insert("assigned", lab.TechA);
+        var request = lab.Request(id);
+        var commands = request + "/commands";
+        var start = DateTimeOffset.UtcNow.AddDays(8);
+        var slot = new { action = "schedule", startsAt = start, endsAt = start.AddHours(2), note = "Bitte Zugang freihalten." };
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(staff, commands, slot, revision: 1)).StatusCode);
+
+        var ownerView = await customer.GetFromJsonAsync<JsonElement>(request);
+        Assert.Contains("confirm_appointment", ownerView.GetProperty("actions").EnumerateArray().Select(x => x.GetString()));
+        var confirmation = new { action = "confirm_appointment" };
+        Assert.Equal(HttpStatusCode.NotFound, (await lab.Post(otherCustomer, commands, confirmation, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(technician, commands, confirmation, revision: 2)).StatusCode);
+        var confirmationKey = Guid.NewGuid().ToString();
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(customer, commands, confirmation, confirmationKey, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(customer, commands, confirmation, confirmationKey, revision: 2)).StatusCode);
+        var confirmed = (await customer.GetFromJsonAsync<JsonElement>(request)).GetProperty("appointment");
+        Assert.Equal("Europe/Berlin", confirmed.GetProperty("timeZone").GetString());
+        Assert.Equal(JsonValueKind.String, confirmed.GetProperty("customerConfirmedAt").ValueKind);
+        Assert.Equal("Bitte Zugang freihalten.", confirmed.GetProperty("customerNote").GetString());
+
+        var changed = new { action = "schedule", startsAt = start.AddDays(1), endsAt = start.AddDays(1).AddHours(2) };
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(staff, commands, changed, revision: 3)).StatusCode);
+        var fresh = (await customer.GetFromJsonAsync<JsonElement>(request)).GetProperty("appointment");
+        Assert.Equal(JsonValueKind.Null, fresh.GetProperty("customerConfirmedAt").ValueKind);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(customer, commands, confirmation, revision: 3)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(customer, commands, confirmation, revision: 4)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ReopeningRecordsAReasonOnlyCompanyStaffCanRead()
+    {
+        using var staff = lab.Client("admin-a", mfa: true);
+        using var customer = lab.Client("customer-a");
+        var id = await lab.Insert("completed", lab.TechA);
+        var request = lab.Request(id);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await lab.Post(staff, request + "/commands",
+            new { action = "reopen" }, revision: 1)).StatusCode);
+        const string reason = "Interner Prüfbedarf";
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(staff, request + "/commands",
+            new { action = "reopen", note = reason }, revision: 1)).StatusCode);
+        Assert.Contains(reason, await (await staff.GetAsync(request)).Content.ReadAsStringAsync());
+        Assert.DoesNotContain(reason, await (await customer.GetAsync(request)).Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public void BerlinTimesRejectSkippedHoursAndRequireAChoiceForAmbiguousHours()
+    {
+        Assert.Null(Workflow.ResolveBerlinSlot("2027-03-28T02:30", null));
+        Assert.Null(Workflow.ResolveBerlinSlot("2027-10-31T02:30", null));
+        var first = Workflow.ResolveBerlinSlot("2027-10-31T02:30", "earlier");
+        var second = Workflow.ResolveBerlinSlot("2027-10-31T02:30", "later");
+        Assert.Equal(TimeSpan.FromHours(2), first!.Value.Offset);
+        Assert.Equal(TimeSpan.FromHours(1), second!.Value.Offset);
+        Assert.Equal(TimeSpan.FromHours(1), second - first);
+    }
+
+    [Fact]
     public async Task ReportReviewRequiresSeparatePermissionsAndDownloadsRespectRecipientVersionAndRevocation()
     {
         using var technician = lab.Client("tech-a");
@@ -608,7 +671,7 @@ public sealed class Lab : IAsyncLifetime
         browserHost.StartServer();
         var origin = browserHost.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!
             .Addresses.Single(x => x.StartsWith("https://127.0.0.1:", StringComparison.Ordinal));
-        var id = await Insert("in_progress", TechA);
+        var id = await Insert(invoice ? "in_progress" : "assigned", TechA);
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var scanner = LocalClamAv() ?? new FixtureInvoiceScanner(clean: true);
         var dispatch = Task.Run(async () =>

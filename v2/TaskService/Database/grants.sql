@@ -23,3 +23,7 @@ GRANT UPDATE (status, review_reason, reviewer_id, reviewed_at, recipient_key, pu
 GRANT SELECT ON ts.invoice_versions, ts.invoice_files TO taskservice_worker;
 GRANT UPDATE (scan_status, scan_at) ON ts.invoice_versions TO taskservice_worker;
 GRANT INSERT ON ts.audit TO taskservice_worker;
+GRANT USAGE ON SCHEMA ts TO taskservice_platform;
+GRANT SELECT, INSERT ON ts.tenants TO taskservice_platform;
+GRANT UPDATE (name, accent, active, lifecycle, revision) ON ts.tenants TO taskservice_platform;
+GRANT SELECT, INSERT ON ts.platform_audit, ts.platform_commands TO taskservice_platform;

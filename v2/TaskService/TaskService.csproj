@@ -15,5 +15,6 @@
     <EmbeddedResource Include="Database/002_reports.sql" LogicalName="TaskService.Reports" />
     <EmbeddedResource Include="Database/003_invoices.sql" LogicalName="TaskService.Invoices" />
     <EmbeddedResource Include="Database/004_appointment_confirmation.sql" LogicalName="TaskService.AppointmentConfirmation" />
+    <EmbeddedResource Include="Database/005_platform_administration.sql" LogicalName="TaskService.PlatformAdministration" />
   </ItemGroup>
 </Project>

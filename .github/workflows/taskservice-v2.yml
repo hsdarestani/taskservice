@@ -48,5 +48,9 @@ jobs:
           TASKSERVICE_INVOICE_BROWSER: ${{ github.workspace }}/v2/tests/invoice_browser.py
           TASKSERVICE_BROWSER_WEBROOT: ${{ github.workspace }}/v2/web/dist
           TASKSERVICE_BROWSER_OUTPUT: ${{ runner.temp }}/taskservice-browser
+      - name: Restore a disposable PostgreSQL backup
+        run: bash v2/ops/restore-smoke.sh
+        env:
+          TASKSERVICE_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
       - run: npm audit --prefix v2/web --audit-level=high
       - run: docker build -f v2/Dockerfile .

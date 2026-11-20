@@ -435,6 +435,63 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public async Task PlatformProvisioningSuspensionAndAuditKeepBusinessDataBehindSeparateDatabaseRole()
+    {
+        using var platform = lab.Client("platform-admin", mfa: true);
+        using var noMfa = lab.Client("platform-admin");
+        using var company = lab.Client("admin-a", mfa: true);
+        using var guest = lab.Client();
+        using var customer = lab.Client("customer-a");
+        const string slug = "qa-platform-company";
+        const string root = "/api/v1/platform";
+        var companyPath = root + "/companies/" + slug + "/commands";
+        var create = new { slug, name = "Werkstatt Prüfbetrieb", accent = "#0A6159" };
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(noMfa, root + "/companies", create, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(company, root + "/companies", create, revision: 0)).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        Assert.Equal(HttpStatusCode.Created, (await lab.Post(platform, root + "/companies", create, key, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await lab.Post(platform, root + "/companies", create, key, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(platform, root + "/companies", create, revision: 0)).StatusCode);
+        var tenant = await lab.TenantId(slug);
+        var request = await lab.Insert("verified", tenant: tenant);
+        Assert.Equal(HttpStatusCode.OK, (await guest.GetAsync(Lab.TenantUrl(slug))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await customer.GetAsync(lab.Request(request, slug))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await platform.GetAsync(lab.Request(request, slug))).StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(platform, companyPath,
+            new { action = "brand", name = "Werkstatt Prüfung", accent = "#1A6159" }, revision: 1)).StatusCode);
+        var publicCompany = await guest.GetFromJsonAsync<JsonElement>(Lab.TenantUrl(slug));
+        Assert.Equal("#1a6159", publicCompany.GetProperty("accent").GetString());
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(platform, companyPath,
+            new { action = "suspend", reason = "Geplante Prüfung" }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(platform, companyPath,
+            new { action = "suspend", reason = "Geplante Prüfung" }, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await guest.GetAsync(Lab.TenantUrl(slug))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await customer.GetAsync(lab.Request(request, slug))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(platform, companyPath,
+            new { action = "activate", reason = "Prüfung abgeschlossen" }, revision: 3)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await customer.GetAsync(lab.Request(request, slug))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(platform, companyPath,
+            new { action = "deactivate", reason = "Prüfmandant beendet" }, revision: 4)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await customer.GetAsync(lab.Request(request, slug))).StatusCode);
+
+        var audit = (await platform.GetFromJsonAsync<JsonElement>(root + "/audit")).GetProperty("items").EnumerateArray();
+        Assert.Equal(5, audit.Count(x => x.GetProperty("slug").GetString() == slug));
+        Assert.Equal(HttpStatusCode.Forbidden, (await customer.GetAsync(root + "/audit")).StatusCode);
+        await using var privileged = new NpgsqlConnection(lab.PlatformConnection);
+        await privileged.OpenAsync();
+        var blocked = await Assert.ThrowsAsync<PostgresException>(() => Lab.Read<long>(privileged, "select count(*) from ts.requests"));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, blocked.SqlState);
+        await using var normal = new NpgsqlConnection(lab.Runtime);
+        await normal.OpenAsync();
+        var blockedAudit = await Assert.ThrowsAsync<PostgresException>(() => Lab.Read<long>(normal, "select count(*) from ts.platform_audit"));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, blockedAudit.SqlState);
+        var blockedWrite = await Assert.ThrowsAsync<PostgresException>(() =>
+            Lab.Execute(normal, "update ts.tenants set name='Forbidden'"));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, blockedWrite.SqlState);
+    }
+
+    [Fact]
     public async Task OpenApi31IsServedAndPlatformAccessRequiresAssurance()
     {
         using var guest = lab.Client();
@@ -454,6 +511,7 @@ public sealed class Lab : IAsyncLifetime
     private string admin = "";
     private WebApplicationFactory<Program> factory = null!;
     public string Runtime { get; private set; } = "";
+    public string PlatformConnection { get; private set; } = "";
     private string worker = "";
     public Guid TenantA { get; } = Guid.NewGuid();
     public Guid TenantB { get; } = Guid.NewGuid();
@@ -479,6 +537,7 @@ public sealed class Lab : IAsyncLifetime
             await Execute(conn, $"""
                 DO $$ BEGIN CREATE ROLE taskservice_api LOGIN PASSWORD 'local-test-only'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                 DO $$ BEGIN CREATE ROLE taskservice_worker LOGIN PASSWORD 'local-test-only'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+                DO $$ BEGIN CREATE ROLE taskservice_platform LOGIN PASSWORD 'local-test-only'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                 """);
             await Execute(conn, $"CREATE DATABASE {dbName}");
         }
@@ -490,6 +549,7 @@ public sealed class Lab : IAsyncLifetime
         };
         Runtime = runtime.ConnectionString;
         worker = new NpgsqlConnectionStringBuilder(Runtime) { Username = "taskservice_worker" }.ConnectionString;
+        PlatformConnection = new NpgsqlConnectionStringBuilder(Runtime) { Username = "taskservice_platform" }.ConnectionString;
         await using (var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(admin).Options))
             await db.Database.MigrateAsync();
         await using (var conn = new NpgsqlConnection(admin))
@@ -525,6 +585,7 @@ public sealed class Lab : IAsyncLifetime
         FixtureA = await Insert("verified");
         FixtureB = await Insert("verified", tenant: TenantB);
         Environment.SetEnvironmentVariable("ConnectionStrings__Runtime", Runtime);
+        Environment.SetEnvironmentVariable("ConnectionStrings__Platform", PlatformConnection);
         Environment.SetEnvironmentVariable("PublicBaseUrl", "https://localhost");
         Environment.SetEnvironmentVariable("Mail__Host", "mail.example.invalid");
         factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
@@ -636,6 +697,15 @@ public sealed class Lab : IAsyncLifetime
                 return content[(content.LastIndexOf('#') + 1)..];
         }
         throw new InvalidOperationException("No verification message for test request.");
+    }
+
+    public async Task<Guid> TenantId(string slug)
+    {
+        await using var db = new NpgsqlConnection(admin);
+        await db.OpenAsync();
+        await using var query = new NpgsqlCommand("select id from ts.tenants where slug=$1", db);
+        query.Parameters.Add(new NpgsqlParameter { Value = slug });
+        return (Guid)(await query.ExecuteScalarAsync())!;
     }
 
     public async Task<Guid> Insert(string state, Guid? technician = null, Guid? tenant = null)

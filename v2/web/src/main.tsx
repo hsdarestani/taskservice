@@ -82,7 +82,7 @@ function App() {
     <main id="inhalt">
       <Notice text={session.error || company.error}/>
       {!session.data && !session.error && <p role="status">Sitzung wird geladen …</p>}
-      {!slug && path[0] === 'plattform' && <Platform/>}
+      {!slug && path[0] === 'plattform' && session.data && <Platform session={session.data}/>}
       {!slug && path[0] !== 'plattform' && <Panel>
         <p className="eyebrow">Serviceportal</p>
         <h1>Ihr Kontakt zum Servicebetrieb</h1>
@@ -99,14 +99,92 @@ function App() {
   </>;
 }
 
-function Platform() {
-  const catalog = useLoad<{ slug: string; name: string; active: boolean }[]>('/api/v1/platform/overview');
-  return <Panel><h1>Plattformverwaltung</h1><Notice text={catalog.error}/>
-    {!catalog.data && !catalog.error && <p role="status">Unternehmen werden geladen …</p>}
-    {catalog.data && <ul className="rows">{catalog.data.map(x => <li key={x.slug}>
-      <strong>{x.name}</strong><span>{x.active ? 'Aktiv' : 'Inaktiv'}</span>
-    </li>)}</ul>}
-  </Panel>;
+type PlatformCompany = {
+  slug: string; name: string; accent: string; lifecycle: 'active' | 'suspended' | 'deactivated'; revision: number;
+};
+type PlatformAuditEntry = { id: string; slug: string; action: string; reason?: string; recordedAt: string };
+const platformApi = '/api/v1/platform';
+const companyState = { active: 'Aktiv', suspended: 'Gesperrt', deactivated: 'Deaktiviert' };
+const platformAction: Record<string, string> = {
+  provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
+  activate: 'Portal aktivieren', deactivate: 'Unternehmen deaktivieren',
+};
+
+function Platform({ session }: { session: Session }) {
+  const [reload, setReload] = useState(0);
+  const [cursor, setCursor] = useState('');
+  const [auditCursor, setAuditCursor] = useState<{ id: string; before: string }>();
+  const overview = useLoad<{ items: PlatformCompany[]; nextCursor?: string }>(session.signedIn
+    ? platformApi + '/overview' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '') : undefined, reload);
+  const audit = useLoad<{ items: PlatformAuditEntry[]; next?: { id: string; before: string } }>(overview.data
+    ? platformApi + '/audit' + (auditCursor ? '?' + new URLSearchParams({ cursor: auditCursor.id, before: auditCursor.before }) : '') : undefined, reload);
+  const refresh = () => { setCursor(''); setAuditCursor(undefined); setReload(x => x + 1); };
+  return <>
+    <div className="hero"><h1>Plattformverwaltung</h1><p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
+    {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Konto mit Mehrfaktor-Anmeldung.</p>
+      <a className="primary" href={login}>Zur Anmeldung</a></Panel>}
+    <Notice text={overview.error}/>
+    {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}
+    {overview.data && <>
+      <Panel><h2>Neues Unternehmen</h2><CompanyEditor session={session} refresh={refresh}/></Panel>
+      <Panel><h2>Unternehmen</h2>
+        {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
+        <div className="report-history">{overview.data.items.map(item => <details key={item.slug}>
+          <summary>{item.name} · {companyState[item.lifecycle]}</summary>
+          <p>Portaladresse <strong>/unternehmen/{item.slug}</strong></p>
+          {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
+        </details>)}</div>
+        {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
+        {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+      </Panel>
+      <Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
+        {audit.data?.items.length === 0 && <p className="muted">Es sind noch keine Änderungen erfasst.</p>}
+        {audit.data && <ul className="rows">{audit.data.items.map(row => <li key={row.id}>
+          <span><strong>{platformAction[row.action]}</strong><small>{row.slug}</small>
+            {row.reason && <small>{row.reason}</small>}
+          </span><small>{date(row.recordedAt)}</small>
+        </li>)}</ul>}
+        {audit.data?.next && <button onClick={() => setAuditCursor(audit.data!.next)}>Ältere Änderungen</button>}
+        {auditCursor && <button onClick={() => setAuditCursor(undefined)}>Neueste Änderungen</button>}
+      </Panel>
+    </>}
+  </>;
+}
+
+function CompanyEditor({ session, refresh, company }: { session: Session; refresh: () => void; company?: PlatformCompany }) {
+  const [action, setAction] = useState(company ? 'brand' : 'provision');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const identity = action === 'brand' || action === 'provision';
+  async function save(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError(''); setBusy(true);
+    const data = Object.fromEntries(new FormData(e.currentTarget));
+    try {
+      await send(company ? platformApi + '/companies/' + encodeURIComponent(company.slug) + '/commands' : platformApi + '/companies',
+        company ? { ...data, action } : data, session.csrfToken, crypto.randomUUID(), company?.revision ?? 0);
+      refresh();
+    } catch (x) { setError((x as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <form onSubmit={save}>
+    {company
+      ? <label>Unternehmensaktion<select value={action} onChange={e => setAction(e.target.value)}>
+        {['brand', company.lifecycle === 'active' ? 'suspend' : 'activate', 'deactivate'].map(key =>
+          <option key={key} value={key}>{platformAction[key]}</option>)}
+      </select></label>
+      : <label>Portaladresse <small>Kleinbuchstaben, Ziffern und Bindestriche, zum Beispiel werkstatt-nord.</small>
+        <input name="slug" maxLength={63} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required/></label>}
+    {identity
+      ? <div className="columns">
+        <label>Unternehmensname<input name="name" defaultValue={company?.name} maxLength={120} required/></label>
+        <label>Markenfarbe<input name="accent" type="color" defaultValue={company?.accent || '#0a6159'} required/></label>
+      </div>
+      : <><label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>
+        {action === 'deactivate' && <p>Das Portal wird deaktiviert. Die gespeicherten Vorgänge bleiben erhalten.</p>}
+      </>}
+    <button className="primary" disabled={busy}>{busy ? 'Wird gespeichert …' : platformAction[action]}</button>
+    <Notice text={error}/>
+  </form>;
 }
 
 function Dashboard({ company, session, portal }: { company: Company; session: Session; portal: string }) {

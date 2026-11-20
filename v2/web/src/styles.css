@@ -29,6 +29,7 @@ label { display: block; margin: .85rem 0; font-weight: 650; }
 textarea, input, select { width: 100%; margin-top: 5px; min-height: 44px;
   background: #fafcfb; border: 1px solid #91aaa4; border-radius: 7px; padding: 9px 12px; font: inherit; color: inherit; }
 textarea { resize: vertical; }
+input[type=color] { max-width: 9rem; padding: 4px; }
 button, .primary { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 15px;
   border: 1px solid #789894; border-radius: 7px; font: inherit; font-weight: 650; cursor: pointer; background: white;
   color: var(--green); text-decoration: none; }

@@ -28,7 +28,7 @@ public static partial class Endpoints
         group.MapPost("/rooms/{channel}", PostMessage);
         MapReports(group);
         MapInvoices(group);
-        app.MapGet("/api/v1/platform/overview", Platform);
+        MapPlatform(app);
     }
 
     internal static async Task<Tenant?> FindTenant(ServiceDb db, string slug, CancellationToken ct) =>
@@ -66,17 +66,6 @@ public static partial class Endpoints
         await using var tx = await db.ForTenant(tenant.Id, ct);
         var actor = await Actor.Read(db, tenant, http, ct);
         return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, Role = actor.Membership?.Role });
-    }
-
-    private static async Task<IResult> Platform(ServiceDb db, IConfiguration config, HttpContext http, CancellationToken ct)
-    {
-        if (Actor.Subject(http.User) is null ||
-            string.IsNullOrWhiteSpace(config["Identity:PrivilegedAcr"]) ||
-            http.User.FindFirst("acr")?.Value != config["Identity:PrivilegedAcr"] ||
-            !http.User.HasClaim("taskservice_role", "platform_admin"))
-            return ApiProblem.Denied();
-        return Results.Ok(await db.Tenants.AsNoTracking().OrderBy(x => x.Slug)
-            .Select(x => new { x.Slug, x.Name, x.Active }).Take(100).ToArrayAsync(ct));
     }
 
     private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, HttpContext http, CancellationToken ct)

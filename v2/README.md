@@ -15,7 +15,7 @@ TASKSERVICE_TEST_ADMIN_DB='<disposable localhost PostgreSQL connection>' \
 docker build -f v2/Dockerfile .
 ```
 
-Run the application from a working directory that contains the built frontend under `wwwroot`, or use the container build. Configure runtime, migration and worker credentials separately. Provision the database roles externally and apply `TaskService/Database/grants.sql` after migration.
+Run the application from a working directory that contains the built frontend under `wwwroot`, or use the container build. Configure runtime, migration, worker and platform credentials separately. Provision the `taskservice_api`, `taskservice_worker` and `taskservice_platform` roles before migration, then apply `TaskService/Database/grants.sql`. The validation workflow restores a logical backup into a separate disposable PostgreSQL database and checks the restored tenant boundaries.
 
 | Entry | Behavior |
 | --- | --- |
@@ -26,6 +26,12 @@ Run the application from a working directory that contains the built frontend un
 Runtime configuration uses `Identity__Authority`, `Identity__ClientId`, `Identity__ClientSecret` and the provider-specific `Identity__PrivilegedAcr`. Ensure the provider defines the privileged assurance value and controls the `taskservice_role` claim server-side. A missing IdP leaves login and readiness unavailable. Configure `PublicBaseUrl` as an HTTPS origin, `Mail__Host`, `Mail__From`, and any SMTP authentication in a secret store. The API and worker use a shared restricted Data Protection key directory. Review and verify proxy configuration before terminating TLS outside the app so the origin check sees the trusted request origin.
 
 The test tenant UI lives at `/unternehmen/{slug}`, `/unternehmen/{slug}/betrieb` and `/unternehmen/{slug}/technik`. The platform catalog is at `/plattform`. A fresh environment requires test tenant and membership data. Automated tests seed both companies directly in their disposable database. OpenAPI is exposed at `/api/openapi/v1.json`.
+
+## Platform administration
+
+The platform portal provisions a company under a new slug. The operator can edit its name and brand color, suspend and reactivate access, or deactivate the company. Lifecycle changes and their reasons are recorded in the platform audit. This area requires the explicit platform claim and configured MFA assurance. Set `ConnectionStrings__Platform` to the restricted platform database role. That role has no read access to tenant tickets, messages or files. The tenant application role cannot modify the catalog or read the platform audit.
+
+Initial company membership, custom domains and support-access delegation remain open. Installable portal branding currently uses the company name and color with the shared TaskService icon.
 
 ## Working reports
 

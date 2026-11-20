@@ -21,6 +21,22 @@ with sync_playwright() as playwright:
         args=["--no-sandbox", "--ignore-certificate-errors"],
     )
 
+    platform = browser.new_context(viewport={"width": 1366, "height": 900}, ignore_https_errors=True,
+        extra_http_headers={"X-Test-Subject": "platform-admin", "X-Test-Mfa": "1"})
+    platform_page = platform.new_page()
+    platform_page.goto(origin + "/plattform", wait_until="domcontentloaded")
+    setup = platform_page.locator("section").filter(has=platform_page.get_by_role("heading", name="Neues Unternehmen"))
+    slug = "qa-browser-" + os.environ["TASKSERVICE_BROWSER_REQUEST"][:8]
+    setup.get_by_label("Portaladresse", exact=False).fill(slug)
+    setup.get_by_label("Unternehmensname").fill("Servicewerkstatt Browserprüfung")
+    with platform_page.expect_response(lambda response: response.url.endswith("/platform/companies") and
+        response.request.method == "POST") as creation:
+        setup.get_by_role("button", name="Unternehmen anlegen").click()
+    assert creation.value.status == 201, (creation.value.status, creation.value.text())
+    expect(platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)).to_be_visible()
+    platform_page.screenshot(path=output / "platform-admin-desktop.png", full_page=True)
+    platform.close()
+
     def open_as(subject, privileged=False, mobile=False):
         headers = {"X-Test-Subject": subject}
         if privileged:

@@ -32,6 +32,7 @@ if (args is ["worker"])
 {
     builder.Services.AddDbContext<ServiceDb>(options => options.UseNpgsql(Connection("Worker")));
     builder.Services.AddHostedService<MailWorker>();
+    builder.Services.AddHostedService<ReportWorker>();
     await builder.Build().RunAsync();
     return;
 }

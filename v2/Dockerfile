@@ -15,7 +15,10 @@ RUN dotnet publish --no-restore -c Release -o /out
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.15
 WORKDIR /app
-RUN install -d -m 0700 -o app -g app /var/lib/taskservice/keys
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -d -m 0700 -o app -g app /var/lib/taskservice/keys
 COPY --from=build /out/ ./
 USER app
 ENV ASPNETCORE_HTTP_PORTS=8080

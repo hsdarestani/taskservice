@@ -8,6 +8,22 @@ export type Detail = RequestRow & {
   history: { state: string; at: string }[];
 };
 export type Message = { sequence: number; author: string; body: string; sentAt: string };
+export type ReportView = {
+  revision?: number;
+  published?: { version: number; publishedAt: string };
+  publishedVersion?: number;
+  pdfReady?: boolean;
+  actions?: string[];
+  versions?: {
+    version: number;
+    status: string;
+    submittedAt: string;
+    reviewReason?: string;
+    activities: { description: string; minutes: number }[];
+    result: string;
+    materials?: string;
+  }[];
+};
 
 export async function get<T>(url: string): Promise<T> {
   return parse<T>(await fetch(url, { headers: { Accept: 'application/json' } }));

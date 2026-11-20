@@ -45,7 +45,7 @@ public sealed class MailWorker(IServiceScopeFactory scopes, IDataProtectionProvi
             {
                 var due = await db.Outbox.FromSqlInterpolated($"""
                     SELECT * FROM ts.outbox
-                    WHERE tenant_id = {tenant} AND completed_at IS NULL AND dead_at IS NULL
+                    WHERE tenant_id = {tenant} AND kind = 'mail' AND completed_at IS NULL AND dead_at IS NULL
                       AND available_at <= now() AND (leased_until IS NULL OR leased_until <= now())
                     ORDER BY available_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
                     """).ToListAsync(ct);

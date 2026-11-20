@@ -48,6 +48,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         model.Entity<Audit>().ToTable("audit").HasKey(x => new { x.TenantId, x.Id });
         model.Entity<Command>().ToTable("commands").HasKey(x => new { x.TenantId, x.Actor, x.Operation, x.Key });
         model.Entity<Outbox>().ToTable("outbox").HasKey(x => new { x.TenantId, x.Id });
+        ConfigureReports(model);
         foreach (var entity in model.Model.GetEntityTypes())
         foreach (var property in entity.GetProperties())
             property.SetColumnName(NameBoundary().Replace(property.Name, "_$1").ToLowerInvariant());
@@ -93,6 +94,7 @@ public sealed record Command(Guid TenantId, string Actor, string Operation, stri
     Guid ResourceId, string Response, string? Location, int? Revision, int Status);
 public sealed record Outbox(Guid TenantId, Guid Id, string Kind, string Payload, DateTimeOffset AvailableAt)
 {
+    public DateTimeOffset AvailableAt { get; set; } = AvailableAt;
     public Guid? LeaseId { get; set; }
     public DateTimeOffset? LeasedUntil { get; set; }
     public int Attempts { get; set; }

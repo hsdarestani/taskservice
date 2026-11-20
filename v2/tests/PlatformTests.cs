@@ -1,12 +1,16 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
@@ -15,6 +19,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using TaskService.Database;
@@ -99,7 +104,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
-    public async Task SimultaneousBookingsAreRejectedAndWorkflowReachesCompletion()
+    public async Task SimultaneousBookingsAreRejectedAndWorkRequiresReportBeforeCompletion()
     {
         using var admin = lab.Client("admin-a", mfa: true);
         using var tech = lab.Client("tech-a");
@@ -120,8 +125,94 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
             new { action = "arrival", arrivalStatus = "departed" }, revision: 2)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await lab.Post(tech, lab.Request(winner) + "/commands",
             new { action = "start" }, revision: 3)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await lab.Post(admin, lab.Request(winner) + "/commands",
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(admin, lab.Request(winner) + "/commands",
             new { action = "complete" }, revision: 4)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ReportReviewRequiresSeparatePermissionsAndDownloadsRespectRecipientVersionAndRevocation()
+    {
+        using var technician = lab.Client("tech-a");
+        using var guest = lab.Client();
+        using var unassigned = lab.Client("tech-chat");
+        using var approver = lab.Client("report-reviewer", mfa: true);
+        using var publisher = lab.Client("report-publisher", mfa: true);
+        using var administrator = lab.Client("admin-a", mfa: true);
+        using var owner = lab.Client("customer-a");
+        using var otherCustomer = lab.Client("customer-b");
+        var ticket = await lab.Insert("in_progress", lab.TechA);
+        var url = lab.Request(ticket) + "/report";
+        var firstPdf = url + "/versions/1/pdf";
+        var secondPdf = url + "/versions/2/pdf";
+        var form = new { action = "submit", activities = new[] { new { description = "Gerät geprüft", minutes = 45 } },
+            result = "Funktion wiederhergestellt.Überprüfung abgeschlossen.", materials = "Dichtung" };
+
+        Assert.Equal(HttpStatusCode.NotFound, (await guest.GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await unassigned.GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await otherCustomer.GetAsync(url)).StatusCode);
+        var empty = await technician.GetAsync(url);
+        Assert.Equal("\"r0\"", empty.Headers.ETag?.Tag);
+        Assert.Contains("submit", await empty.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(owner, url + "/commands", form, revision: 0)).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(technician, url + "/commands", form, key, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(technician, url + "/commands", form, key, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(technician, url + "/commands", form, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(publisher, url + "/commands",
+            new { action = "approve", version = 1 }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(approver, url + "/commands",
+            new { action = "reject", version = 1, reason = "Dauer überprüfen." }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(technician, url + "/commands", form, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(secondPdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(approver, url + "/commands",
+            new { action = "approve", version = 2 }, revision: 3)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(approver, url + "/commands",
+            new { action = "publish", version = 2 }, revision: 4)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(publisher, url + "/commands",
+            new { action = "publish", version = 2 }, revision: 4)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(secondPdf)).StatusCode);
+        Assert.True(await lab.ProcessReport());
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(publisher, url + "/commands",
+            new { action = "publish", version = 2 }, revision: 4)).StatusCode);
+
+        var download = await owner.GetAsync(secondPdf);
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal("application/pdf", download.Content.Headers.ContentType?.MediaType);
+        Assert.True(download.Headers.CacheControl?.NoStore);
+        Assert.StartsWith("%PDF-", System.Text.Encoding.ASCII.GetString((await download.Content.ReadAsByteArrayAsync())[..5]));
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(firstPdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await otherCustomer.GetAsync(secondPdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(lab.Request(ticket, "other") + "/report/versions/2/pdf")).StatusCode);
+        Assert.DoesNotContain("Dauer überprüfen.", await (await owner.GetAsync(url)).Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(administrator, lab.Request(ticket) + "/commands",
+            new { action = "complete" }, revision: 1)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(publisher, url + "/commands",
+            new { action = "revoke", version = 2 }, revision: 5)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(secondPdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await approver.GetAsync(secondPdf)).StatusCode);
+        await using var isolated = new NpgsqlConnection(lab.Runtime);
+        await isolated.OpenAsync();
+        Assert.Equal(0L, await Lab.Read<long>(isolated, "select count(*) from ts.report_files"));
+        await using var tx = await isolated.BeginTransactionAsync();
+        await Lab.Scope(isolated, lab.TenantB);
+        Assert.Equal(0L, await Lab.Read<long>(isolated, "select count(*) from ts.report_versions"));
+        await tx.RollbackAsync();
+        if (Environment.GetEnvironmentVariable("TASKSERVICE_REPORT_BROWSER") is { Length: > 0 } browserScript)
+            await lab.RunReportBrowser(browserScript);
+    }
+
+    [Fact]
+    public async Task AStaffAuthorCannotApproveTheirOwnReportByDefault()
+    {
+        using var author = lab.Client("report-author", mfa: true);
+        var ticket = await lab.Insert("in_progress", lab.TechA);
+        var url = lab.Request(ticket) + "/report";
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(author, url + "/commands",
+            new { action = "submit", activities = new[] { new { description = "Gerät geprüft", minutes = 45 } },
+                result = "Funktion wiederhergestellt." }, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(author, url + "/commands",
+            new { action = "approve", version = 1 }, revision: 1)).StatusCode);
     }
 
     [Fact]
@@ -173,6 +264,7 @@ public sealed class Lab : IAsyncLifetime
     private string admin = "";
     private WebApplicationFactory<Program> factory = null!;
     public string Runtime { get; private set; } = "";
+    private string worker = "";
     public Guid TenantA { get; } = Guid.NewGuid();
     public Guid TenantB { get; } = Guid.NewGuid();
     public Guid TechA { get; } = Guid.NewGuid();
@@ -207,6 +299,7 @@ public sealed class Lab : IAsyncLifetime
             Username = "taskservice_api", Password = "local-test-only", MaxPoolSize = 10
         };
         Runtime = runtime.ConnectionString;
+        worker = new NpgsqlConnectionStringBuilder(Runtime) { Username = "taskservice_worker" }.ConnectionString;
         await using (var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(admin).Options))
             await db.Database.MigrateAsync();
         await using (var conn = new NpgsqlConnection(admin))
@@ -218,10 +311,19 @@ public sealed class Lab : IAsyncLifetime
                                              ('{TenantB}','other','Werkstatt Süd','#0a6159',true);
                 """);
             foreach (var (subject, id, role) in new[] { ("admin-a", Guid.NewGuid(), "admin"),
-                ("tech-a", TechA, "technician"), ("tech-chat", TechChat, "technician") })
+                ("tech-a", TechA, "technician"), ("tech-chat", TechChat, "technician"),
+                ("report-reviewer", Guid.NewGuid(), "dispatcher"), ("report-publisher", Guid.NewGuid(), "dispatcher"),
+                ("report-author", Guid.NewGuid(), "admin") })
                 await Execute(conn, $"""
                     INSERT INTO ts.members VALUES ('{TenantA}','{id}','{Actor.SubjectKey(Issuer, subject)}','{subject}','{role}',true)
                     """);
+            await Execute(conn, $"""
+                INSERT INTO ts.report_permissions
+                SELECT m.tenant_id, m.id, p.permission FROM ts.members m JOIN (VALUES
+                    ('report-reviewer', 'report.approve'), ('report-publisher', 'report.publish'),
+                    ('report-author', 'report.create'), ('report-author', 'report.approve')
+                ) p(name, permission) ON p.name = m.name WHERE m.tenant_id = '{TenantA}'
+                """);
         }
         FixtureA = await Insert("verified");
         FixtureB = await Insert("verified", tenant: TenantB);
@@ -313,6 +415,64 @@ public sealed class Lab : IAsyncLifetime
                     '{Actor.SubjectKey(Issuer, "customer-a")}',{tech},'{state}',1,now())
             """);
         return id;
+    }
+
+    public async Task RunReportBrowser(string script)
+    {
+        var webRoot = Environment.GetEnvironmentVariable("TASKSERVICE_BROWSER_WEBROOT")
+            ?? throw new InvalidOperationException("Provide the absolute path to the built web application.");
+        using var key = RSA.Create(2048);
+        var certificateRequest = new CertificateRequest("CN=localhost", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddIpAddress(IPAddress.Loopback);
+        certificateRequest.CertificateExtensions.Add(names.Build());
+        using var certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        await using var browserHost = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseWebRoot(webRoot);
+            builder.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(certificate)));
+        });
+        browserHost.UseKestrel();
+        browserHost.StartServer();
+        var origin = browserHost.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!
+            .Addresses.Single(x => x.StartsWith("https://127.0.0.1:", StringComparison.Ordinal));
+        var id = await Insert("in_progress", TechA);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var dispatch = Task.Run(async () =>
+        {
+            while (!timeout.IsCancellationRequested)
+            {
+                await ProcessReport();
+                await Task.Delay(500, timeout.Token);
+            }
+        });
+
+        var args = new ProcessStartInfo("python3") { RedirectStandardOutput = true, RedirectStandardError = true };
+        args.ArgumentList.Add(script);
+        args.Environment["TASKSERVICE_BROWSER_BASE"] = origin;
+        args.Environment["TASKSERVICE_BROWSER_REQUEST"] = id.ToString();
+        using var browser = Process.Start(args) ?? throw new InvalidOperationException("Could not start Playwright.");
+        var stdout = browser.StandardOutput.ReadToEndAsync(timeout.Token);
+        var stderr = browser.StandardError.ReadToEndAsync(timeout.Token);
+        try
+        {
+            await browser.WaitForExitAsync(timeout.Token);
+            Assert.True(browser.ExitCode == 0, $"{await stdout}\n{await stderr}");
+            Console.WriteLine(await stdout);
+        }
+        finally
+        {
+            if (!browser.HasExited)
+                browser.Kill(entireProcessTree: true);
+            await timeout.CancelAsync();
+            try { await dispatch; } catch (OperationCanceledException) { }
+        }
+    }
+
+    public async Task<bool> ProcessReport()
+    {
+        await using var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(worker).Options);
+        return await ReportWorker.ProcessNext(db, TenantA, NullLogger.Instance, CancellationToken.None);
     }
 
     public async Task Revoke(Guid id)

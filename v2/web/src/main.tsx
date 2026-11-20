@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { get, send } from './api';
-import type { Company, Detail, Message, RequestRow, Session } from './api';
+import type { Company, Detail, Message, ReportView, RequestRow, Session } from './api';
 import './styles.css';
 
 const states: Record<string, string> = {
@@ -208,10 +208,97 @@ function RequestDetail({ session, id, company }: { session: Session; id: string;
       <Panel><h2>Verlauf</h2><ol className="history">{row.history.map((x, i) =>
         <li key={i}><strong>{states[x.state] || x.state}</strong><small>{date(x.at)}</small></li>)}</ol></Panel>
     </div>
-    {row.actions.length > 0 && <Commands row={row} session={session} refresh={() => setRevision(x => x + 1)}/>}
+    {row.actions.length > 0 && <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(x => x + 1)}/>}
+    <ReportPanel id={id} session={session}/>
     <Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/>
     {company.role && <Chat session={session} id={id} channel="internal" title="Interne Notizen"/>}
   </>;
+}
+
+const reportStates: Record<string, string> = {
+  submitted: 'Zur Prüfung eingereicht', rejected: 'Zur Überarbeitung zurückgegeben',
+  approved: 'Geprüft', published: 'Veröffentlicht', superseded: 'Durch neue Version ersetzt', revoked: 'Veröffentlichung widerrufen',
+};
+const reportActions: Record<string, string> = {
+  submit: 'Bericht einreichen', approve: 'Bericht genehmigen', reject: 'Zur Überarbeitung zurückgeben',
+  publish: 'Für den Kunden veröffentlichen', revoke: 'Veröffentlichung widerrufen',
+};
+
+function ReportPanel({ id, session }: { id: string; session: Session }) {
+  const url = api + '/requests/' + id + '/report';
+  const [reload, setReload] = useState(0);
+  const report = useLoad<ReportView>(url, reload);
+  const data = report.data;
+  const current = data?.versions?.[0];
+  const download = (version: number) => url + '/versions/' + version + '/pdf';
+
+  return <Panel>
+    <div className="panel-heading"><h2>Arbeitsbericht</h2>
+      {data?.versions && <button className="link" onClick={() => setReload(x => x + 1)}>Bericht aktualisieren</button>}
+    </div>
+    <Notice text={report.error}/>
+    {!data && !report.error && <p role="status">Arbeitsbericht wird geladen …</p>}
+    {data && (data.versions ? <>
+      {current ? <p><strong>Version {current.version}</strong> · {reportStates[current.status]}</p> :
+        <p className="muted">Für diesen Vorgang liegt noch kein Arbeitsbericht vor.</p>}
+      {current?.status === 'approved' && !data.pdfReady &&
+        <p role="status">Das PDF wird erstellt. Aktualisieren Sie den Bericht, um den Stand zu prüfen.</p>}
+      {current && data.pdfReady && <p><a href={download(current.version)}>PDF zu Version {current.version} herunterladen</a></p>}
+      {data.versions.length > 0 && <div className="report-history">{data.versions.map(version =>
+        <details key={version.version}><summary>Version {version.version} · {reportStates[version.status]}</summary>
+          <small>Eingereicht am {date(version.submittedAt)}</small>
+          {version.reviewReason && <p className="notice">Rückmeldung zur Überarbeitung: {version.reviewReason}</p>}
+          <ul>{version.activities.map((item, index) => <li key={index}>{item.description} · {item.minutes} Min.</li>)}</ul>
+          <p className="preserve"><strong>Ergebnis</strong><br/>{version.result}</p>
+          {version.materials && <p className="preserve"><strong>Material</strong><br/>{version.materials}</p>}
+        </details>)}</div>}
+      {!!data.actions?.length && <ReportForm url={url} data={data} session={session} refresh={() => setReload(x => x + 1)}/>}
+    </> : data.published ?
+      <p><a href={download(data.published.version)}>Arbeitsbericht als PDF herunterladen</a><small>
+        Version {data.published.version} · Veröffentlicht am {date(data.published.publishedAt)}
+      </small></p> : <p className="muted">Hier erscheint Ihr Arbeitsbericht, sobald er veröffentlicht wurde.</p>)}
+  </Panel>;
+}
+
+function ReportForm({ url, data, session, refresh }: { url: string; data: ReportView; session: Session; refresh: () => void }) {
+  const current = data.versions?.[0];
+  const template = current?.status === 'rejected' ? current : undefined;
+  const [rows, setRows] = useState(() => (template?.activities || [{ description: '', minutes: undefined }])
+    .map(item => ({ ...item, id: crypto.randomUUID() })));
+  const [action, setAction] = useState(data.actions![0]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError(''); setBusy(true);
+    const form = new FormData(e.currentTarget);
+    const body = action === 'submit' ? {
+      action, result: form.get('result'), materials: form.get('materials'),
+      activities: rows.map(row => ({ description: form.get(row.id), minutes: Number(form.get(row.id + '-minutes')) })),
+    } : { action, version: action === 'revoke' ? data.publishedVersion : current?.version, reason: form.get('reason') };
+    try {
+      await send(url + '/commands', body, session.csrfToken, crypto.randomUUID(), data.revision);
+      refresh();
+    } catch (x) { setError((x as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <form onSubmit={submit}>
+    <label>Aktion für den Arbeitsbericht<select value={action} onChange={e => setAction(e.target.value)}>
+      {data.actions!.map(key => <option key={key} value={key}>{reportActions[key]}</option>)}
+    </select></label>
+    {action === 'submit' && <>
+      {rows.map((item, index) => <div className="report-activity" key={item.id}>
+        <label>Tätigkeit {index + 1}<input name={item.id} defaultValue={item.description} maxLength={240} required/></label>
+        <label>Dauer in Minuten<input name={item.id + '-minutes'} defaultValue={item.minutes} type="number" min={1} max={1440} required/></label>
+        {rows.length > 1 && <button type="button" onClick={() => setRows(rows.filter(x => x.id !== item.id))}>Entfernen<span className="sr-only"> · Tätigkeit {index + 1}</span></button>}
+      </div>)}
+      {rows.length < 12 && <button type="button" onClick={() => setRows([...rows, { id: crypto.randomUUID(), description: '', minutes: undefined }])}>Tätigkeit hinzufügen</button>}
+      <label>Ergebnis<textarea name="result" rows={3} defaultValue={template?.result} maxLength={3000} required/></label>
+      <label>Material <small>Falls Material verwendet wurde.</small><textarea name="materials" rows={2} defaultValue={template?.materials} maxLength={2000}/></label>
+    </>}
+    {action === 'reject' && <label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>}
+    <button className="primary" disabled={busy}>{busy ? 'Wird gespeichert …' : reportActions[action]}</button>
+    <Notice text={error}/>
+  </form>;
 }
 
 function Commands({ row, session, refresh }: { row: Detail; session: Session; refresh: () => void }) {

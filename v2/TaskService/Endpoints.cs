@@ -9,7 +9,7 @@ using TaskService.Database;
 
 namespace TaskService;
 
-public static class Endpoints
+public static partial class Endpoints
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -25,6 +25,7 @@ public static class Endpoints
         group.MapGet("/technicians", Technicians);
         group.MapGet("/rooms/{channel}", Messages);
         group.MapPost("/rooms/{channel}", PostMessage);
+        MapReports(group);
         app.MapGet("/api/v1/platform/overview", Platform);
     }
 
@@ -261,7 +262,12 @@ public static class Endpoints
                 appointment.ArrivalStatus = body.ArrivalStatus;
                 break;
             case "start": request.State = "in_progress"; break;
-            case "complete": request.State = "completed"; break;
+            case "complete":
+                if (!await db.Reports.AnyAsync(x => x.TenantId == tenant.Id && x.RequestId == id &&
+                    x.PublishedVersion != null && x.CurrentVersion == x.PublishedVersion, ct))
+                    return ApiProblem.Error(409, "report_publication_required", "Veröffentlichen Sie zuerst den aktuellen Arbeitsbericht.");
+                request.State = "completed";
+                break;
             case "cancel":
             case "reopen":
                 if (appointment is not null)

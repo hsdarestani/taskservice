@@ -25,6 +25,39 @@ export type ReportView = {
   }[];
 };
 
+export type InvoiceVersion = {
+  version: number;
+  originalName: string;
+  uploadedAt: string;
+  publishedAt?: string;
+  size: number;
+  status: string;
+  scanStatus: string;
+  reviewReason?: string;
+};
+export type InvoiceItem = InvoiceVersion & {
+  id: string;
+  revision: number | null;
+  publishedVersion?: number;
+  canDownload: boolean;
+  actions: string[];
+};
+
+export async function uploadInvoice(url: string, file: File, csrfToken: string, invoice?: InvoiceItem) {
+  const target = url + '/upload' + (invoice ? '?invoiceId=' + encodeURIComponent(invoice.id) : '');
+  return parse(await fetch(target, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.name.toLowerCase().endsWith('.xml') ? 'application/xml' : 'application/pdf',
+      'X-Invoice-Name': encodeURIComponent(file.name),
+      'X-CSRF-Token': csrfToken,
+      'Idempotency-Key': crypto.randomUUID(),
+      'If-Match': `"r${invoice?.revision ?? 0}"`,
+    },
+    body: file,
+  }));
+}
+
 export async function get<T>(url: string): Promise<T> {
   return parse<T>(await fetch(url, { headers: { Accept: 'application/json' } }));
 }

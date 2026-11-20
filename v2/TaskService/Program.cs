@@ -11,6 +11,7 @@ using TaskService.Database;
 using TaskService;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
 if (args is ["migrate"])
 {
@@ -33,6 +34,8 @@ if (args is ["worker"])
     builder.Services.AddDbContext<ServiceDb>(options => options.UseNpgsql(Connection("Worker")));
     builder.Services.AddHostedService<MailWorker>();
     builder.Services.AddHostedService<ReportWorker>();
+    builder.Services.AddSingleton<InvoiceScanner, ClamAvScanner>();
+    builder.Services.AddHostedService<InvoiceScanWorker>();
     await builder.Build().RunAsync();
     return;
 }
@@ -55,6 +58,7 @@ builder.Services.AddAntiforgery(options =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = 429;
+    options.AddConcurrencyLimiter("invoice-upload", limiter => { limiter.PermitLimit = 3; limiter.QueueLimit = 0; });
     options.AddPolicy("guest", http => RateLimitPartition.GetFixedWindowLimiter(
         http.Connection.RemoteIpAddress?.ToString() ?? "local",
         _ => new FixedWindowRateLimiterOptions

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
-import { get, send } from './api';
-import type { Company, Detail, Message, ReportView, RequestRow, Session } from './api';
+import { get, send, uploadInvoice } from './api';
+import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
 import './styles.css';
 
 const states: Record<string, string> = {
@@ -210,6 +210,7 @@ function RequestDetail({ session, id, company }: { session: Session; id: string;
     </div>
     {row.actions.length > 0 && <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(x => x + 1)}/>}
     <ReportPanel id={id} session={session}/>
+    <InvoicesPanel id={id} session={session}/>
     <Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/>
     {company.role && <Chat session={session} id={id} channel="internal" title="Interne Notizen"/>}
   </>;
@@ -297,6 +298,115 @@ function ReportForm({ url, data, session, refresh }: { url: string; data: Report
     </>}
     {action === 'reject' && <label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>}
     <button className="primary" disabled={busy}>{busy ? 'Wird gespeichert …' : reportActions[action]}</button>
+    <Notice text={error}/>
+  </form>;
+}
+
+const invoiceStatus: Record<string, string> = {
+  uploaded: 'In Prüfung', approved: 'Genehmigt', rejected: 'Zurückgegeben',
+  published: 'Veröffentlicht', superseded: 'Durch neue Version ersetzt', revoked: 'Veröffentlichung widerrufen',
+};
+const invoiceScan: Record<string, string> = {
+  pending: 'Sicherheitsprüfung läuft', clean: 'Sicherheitsprüfung bestanden',
+  quarantined: 'In Quarantäne', failed: 'Sicherheitsprüfung fehlgeschlagen',
+};
+const invoiceActions: Record<string, string> = {
+  upload: 'Neue Version hochladen', approve: 'Rechnung genehmigen', reject: 'Zurückgeben',
+  publish: 'Für den Kunden veröffentlichen', revoke: 'Veröffentlichung widerrufen',
+};
+
+function InvoicesPanel({ id, session }: { id: string; session: Session }) {
+  const [reload, setReload] = useState(0);
+  const [cursor, setCursor] = useState('');
+  const url = api + '/requests/' + id + '/invoices';
+  const invoices = useLoad<{ canUpload: boolean; items: InvoiceItem[]; nextCursor?: string }>(
+    url + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''), reload);
+  const refresh = () => setReload(x => x + 1);
+  return <Panel>
+    <div className="panel-heading"><h2>Rechnungen</h2>
+      {invoices.data && (invoices.data.canUpload || invoices.data.items.some(x => x.revision !== null)) &&
+        <button className="link" onClick={refresh}>Rechnungen aktualisieren</button>}
+    </div>
+    <Notice text={invoices.error}/>
+    {!invoices.data && !invoices.error && <p role="status">Rechnungen werden geladen …</p>}
+    {invoices.data?.items.length === 0 && <p className="muted">Für diesen Vorgang sind noch keine Rechnungen verfügbar.</p>}
+    {invoices.data?.items.map(invoice => <InvoiceRow key={invoice.id} invoice={invoice} url={url} session={session} refresh={refresh}/>)}
+    {invoices.data?.nextCursor && <button onClick={() => setCursor(invoices.data!.nextCursor!)}>Weitere Rechnungen</button>}
+    {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+    {invoices.data?.canUpload && <InvoiceUploadForm url={url} session={session} refresh={refresh}/>}
+  </Panel>;
+}
+
+function InvoiceRow({ invoice, url, session, refresh }: { invoice: InvoiceItem; url: string; session: Session; refresh: () => void }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const [cursor, setCursor] = useState<number>();
+  const [action, setAction] = useState(invoice.actions[0]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const itemUrl = url + '/' + invoice.id;
+  const history = useLoad<{ items: InvoiceVersion[]; nextCursor?: number }>(
+    showHistory ? itemUrl + (cursor ? '?before=' + cursor : '') : undefined);
+  const internal = invoice.revision != null;
+  async function change(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError(''); setBusy(true);
+    const reason = new FormData(e.currentTarget).get('reason');
+    try {
+      await send(itemUrl + '/commands', { action, reason, version: action === 'revoke' ? invoice.publishedVersion : invoice.version },
+        session.csrfToken, crypto.randomUUID(), invoice.revision ?? undefined);
+      refresh();
+    } catch (x) { setError((x as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <div className="invoice-item">
+    <p><strong>{invoice.originalName}</strong>
+      <small>{internal
+        ? `Version ${invoice.version} · ${invoiceStatus[invoice.status]} · ${invoiceScan[invoice.scanStatus]}`
+        : invoice.publishedAt && 'Veröffentlicht am ' + date(invoice.publishedAt)}</small>
+    </p>
+    {invoice.canDownload && <p><a href={itemUrl + '/versions/' + invoice.version + '/download'}>Original herunterladen</a></p>}
+    {internal && <button className="link" aria-expanded={showHistory} onClick={() => { setShowHistory(!showHistory); setCursor(undefined); }}>
+      Versionsverlauf {showHistory ? 'ausblenden' : 'anzeigen'}
+    </button>}
+    {history.data && <ul className="rows">{history.data.items.map(version => <li key={version.version}>
+      <span><strong>Version {version.version} · {version.originalName}</strong>
+        <small>{invoiceStatus[version.status]} · {invoiceScan[version.scanStatus]}</small>
+        {version.reviewReason && <small>{version.reviewReason}</small>}
+      </span><small>{date(version.uploadedAt)}</small>
+    </li>)}</ul>}
+    {history.data?.nextCursor && <button onClick={() => setCursor(history.data!.nextCursor)}>Ältere Versionen</button>}
+    {cursor && <button onClick={() => setCursor(undefined)}>Neueste Versionen</button>}
+    <Notice text={history.error || error}/>
+    {!!invoice.actions.length && <>
+      <label>Aktion für die Rechnung<select value={action} onChange={e => setAction(e.target.value)}>
+        {invoice.actions.map(a => <option key={a} value={a}>{invoiceActions[a]}</option>)}
+      </select></label>
+      {action === 'upload' ? <InvoiceUploadForm url={url} invoice={invoice} session={session} refresh={refresh}/> :
+        <form onSubmit={change}>
+          {action === 'reject' && <label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>}
+          <button className="primary" disabled={busy}>{invoiceActions[action]}</button>
+        </form>}
+    </>}
+  </div>;
+}
+
+function InvoiceUploadForm({ url, invoice, session, refresh }: { url: string; invoice?: InvoiceItem; session: Session; refresh: () => void }) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function upload(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setError(''); setBusy(true);
+    const file = new FormData(e.currentTarget).get('invoice');
+    try {
+      if (!(file instanceof File) || file.size < 1 || file.size > 10 * 1024 * 1024)
+        throw new Error('Bitte wählen Sie eine Datei mit höchstens 10 MB.');
+      await uploadInvoice(url, file, session.csrfToken, invoice);
+      refresh();
+    } catch (x) { setError((x as Error).message); }
+    finally { setBusy(false); }
+  }
+  return <form onSubmit={upload}>
+    <label>{invoice ? 'Korrigiertes Original' : 'Rechnungsoriginal'} <small>PDF oder XML bis 10 MB.</small>
+      <input type="file" name="invoice" accept=".pdf,.xml" required/></label>
+    <button className="primary" disabled={busy}>{busy ? 'Wird hochgeladen …' : 'Datei hochladen'}</button>
     <Notice text={error}/>
   </form>;
 }

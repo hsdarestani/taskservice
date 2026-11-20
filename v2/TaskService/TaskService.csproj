@@ -13,5 +13,6 @@
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
     <EmbeddedResource Include="Database/001_initial.sql" LogicalName="TaskService.Schema" />
     <EmbeddedResource Include="Database/002_reports.sql" LogicalName="TaskService.Reports" />
+    <EmbeddedResource Include="Database/003_invoices.sql" LogicalName="TaskService.Invoices" />
   </ItemGroup>
 </Project>

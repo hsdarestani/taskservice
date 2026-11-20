@@ -26,6 +26,7 @@ public static partial class Endpoints
         group.MapGet("/rooms/{channel}", Messages);
         group.MapPost("/rooms/{channel}", PostMessage);
         MapReports(group);
+        MapInvoices(group);
         app.MapGet("/api/v1/platform/overview", Platform);
     }
 

@@ -45,6 +45,7 @@ jobs:
       - run: dotnet test v2/tests/TaskService.Tests.csproj --configuration Release
         env:
           TASKSERVICE_REPORT_BROWSER: ${{ github.workspace }}/v2/tests/report_browser.py
+          TASKSERVICE_INVOICE_BROWSER: ${{ github.workspace }}/v2/tests/invoice_browser.py
           TASKSERVICE_BROWSER_WEBROOT: ${{ github.workspace }}/v2/web/dist
           TASKSERVICE_BROWSER_OUTPUT: ${{ runner.temp }}/taskservice-browser
       - run: npm audit --prefix v2/web --audit-level=high

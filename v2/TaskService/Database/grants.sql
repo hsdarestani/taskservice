@@ -15,3 +15,11 @@ GRANT UPDATE (status, review_reason, reviewer_id, reviewed_at, recipient_key, pu
     ON ts.report_versions TO taskservice_api;
 GRANT SELECT ON ts.report_versions, ts.report_files TO taskservice_worker;
 GRANT INSERT ON ts.report_files TO taskservice_worker;
+GRANT SELECT ON ts.invoice_permissions TO taskservice_api;
+GRANT SELECT, INSERT ON ts.invoices, ts.invoice_versions, ts.invoice_files TO taskservice_api;
+GRANT UPDATE (revision, current_version, published_version) ON ts.invoices TO taskservice_api;
+GRANT UPDATE (status, review_reason, reviewer_id, reviewed_at, recipient_key, published_at)
+    ON ts.invoice_versions TO taskservice_api;
+GRANT SELECT ON ts.invoice_versions, ts.invoice_files TO taskservice_worker;
+GRANT UPDATE (scan_status, scan_at) ON ts.invoice_versions TO taskservice_worker;
+GRANT INSERT ON ts.audit TO taskservice_worker;

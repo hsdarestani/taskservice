@@ -1,6 +1,9 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -199,7 +202,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         Assert.Equal(0L, await Lab.Read<long>(isolated, "select count(*) from ts.report_versions"));
         await tx.RollbackAsync();
         if (Environment.GetEnvironmentVariable("TASKSERVICE_REPORT_BROWSER") is { Length: > 0 } browserScript)
-            await lab.RunReportBrowser(browserScript);
+            await lab.RunBrowser(browserScript, invoice: false);
     }
 
     [Fact]
@@ -213,6 +216,130 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
                 result = "Funktion wiederhergestellt." }, revision: 0)).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(author, url + "/commands",
             new { action = "approve", version = 1 }, revision: 1)).StatusCode);
+    }
+
+    [Fact]
+    public async Task InvoiceOriginalWaitsForScanAndSeparationOfDutiesAndIsRevocable()
+    {
+        using var uploader = lab.Client("invoice-uploader", mfa: true);
+        using var reviewer = lab.Client("report-reviewer", mfa: true);
+        using var publisher = lab.Client("report-publisher", mfa: true);
+        using var owner = lab.Client("customer-a");
+        using var stranger = lab.Client("customer-b");
+        var ticket = await lab.Insert("in_progress", lab.TechA);
+        var url = lab.Request(ticket) + "/invoices";
+        var original = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"><Synthetic>Prüfung</Synthetic></Invoice>
+            """u8.ToArray();
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Upload(owner, url, original)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await lab.Upload(uploader, url, "<Invoice />"u8.ToArray())).StatusCode);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType,
+            (await lab.Upload(uploader, url, original, name: "../invoice.xml")).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        var response = await lab.Upload(uploader, url, original, key: key);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var id = result.GetProperty("id").GetGuid();
+        var item = url + "/" + id;
+        var pdf = item + "/versions/1/download";
+        Assert.Equal(response.Headers.Location, (await lab.Upload(uploader, url, original, key: key)).Headers.Location);
+        Assert.Equal(HttpStatusCode.OK, (await uploader.GetAsync(url)).StatusCode);
+        Assert.Empty((await owner.GetFromJsonAsync<JsonElement>(url)).GetProperty("items").EnumerateArray());
+        Assert.Equal(HttpStatusCode.NotFound, (await reviewer.GetAsync(pdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(reviewer, item + "/commands",
+            new { action = "approve", version = 1 }, revision: 1)).StatusCode);
+        Assert.Equal(0L, await lab.VisibleInvoiceFiles(lab.TenantA));
+
+        var cleanScanner = Lab.LocalClamAv() ?? new FixtureInvoiceScanner(clean: true);
+        Assert.True(await lab.ProcessInvoice(cleanScanner));
+        Assert.True(await lab.VisibleInvoiceFiles(lab.TenantA) > 0);
+        Assert.Equal(0L, await lab.VisibleInvoiceFiles(lab.TenantB));
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(uploader, item + "/commands",
+            new { action = "approve", version = 1 }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(reviewer, item + "/commands",
+            new { action = "approve", version = 1 }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(reviewer, item + "/commands",
+            new { action = "publish", version = 1 }, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(publisher, item + "/commands",
+            new { action = "publish", version = 1 }, revision: 2)).StatusCode);
+
+        var data = await owner.GetFromJsonAsync<JsonElement>(url);
+        Assert.Single(data.GetProperty("items").EnumerateArray());
+        var download = await owner.GetAsync(pdf);
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal("application/xml", download.Content.Headers.ContentType?.MediaType);
+        Assert.True(download.Headers.CacheControl?.NoStore);
+        Assert.Equal(original, await download.Content.ReadAsByteArrayAsync());
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.GetAsync(pdf)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(lab.Request(ticket, "other") + $"/invoices/{id}/versions/1/download")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(publisher, item + "/commands",
+            new { action = "revoke", version = 1 }, revision: 3)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(pdf)).StatusCode);
+
+        var marker = """
+            <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"><Synthetic>TASKSERVICE-QA-SCAN-MARKER</Synthetic></Invoice>
+            """u8.ToArray();
+        Assert.Equal(HttpStatusCode.Created, (await lab.Upload(uploader, url, marker, id: id, revision: 4)).StatusCode);
+        Assert.True(await lab.ProcessInvoice(Lab.LocalClamAv() ?? new FixtureInvoiceScanner(clean: false)));
+        Assert.Contains("quarantined", await (await uploader.GetAsync(item)).Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, (await reviewer.GetAsync(item + "/versions/2/download")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(reviewer, item + "/commands",
+            new { action = "approve", version = 2 }, revision: 5)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await lab.Upload(uploader, url, original, id: id, revision: 5)).StatusCode);
+        Assert.True(await lab.ProcessInvoice(new UnavailableInvoiceScanner()));
+        Assert.Contains("pending", await (await uploader.GetAsync(item)).Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, (await reviewer.GetAsync(item + "/versions/3/download")).StatusCode);
+        if (Environment.GetEnvironmentVariable("TASKSERVICE_INVOICE_BROWSER") is { Length: > 0 } browserScript)
+            await lab.RunBrowser(browserScript, invoice: true);
+    }
+
+    [Fact]
+    public async Task ClamAvAdapterStreamsBoundedFramesAndAcceptsOnlyRecognizedVerdicts()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var scanner = new ClamAvScanner(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ClamAv:Host"] = "127.0.0.1", ["ClamAv:Port"] = port.ToString()
+        }).Build());
+        var bytes = RandomNumberGenerator.GetBytes(80000);
+        foreach (var (response, expected) in new[] { ("stream: OK", true), ("stream: TestMarker FOUND", false) })
+        {
+            var exchange = Receive(response);
+            Assert.Equal(expected, await scanner.IsClean(bytes, timeout.Token));
+            await exchange;
+        }
+        var failure = Receive("stream: internal error ERROR");
+        await Assert.ThrowsAsync<IOException>(() => scanner.IsClean(bytes, timeout.Token));
+        await failure;
+
+        async Task Receive(string response)
+        {
+            using var connection = await listener.AcceptTcpClientAsync(timeout.Token);
+            await using var stream = connection.GetStream();
+            var command = new byte[10];
+            await stream.ReadExactlyAsync(command, timeout.Token);
+            Assert.Equal("zINSTREAM\0"u8.ToArray(), command);
+            using var received = new MemoryStream();
+            var header = new byte[4];
+            while (true)
+            {
+                await stream.ReadExactlyAsync(header, timeout.Token);
+                var size = BinaryPrimitives.ReadInt32BigEndian(header);
+                if (size == 0) break;
+                Assert.InRange(size, 1, 64 * 1024);
+                var block = new byte[size];
+                await stream.ReadExactlyAsync(block, timeout.Token);
+                received.Write(block);
+            }
+            Assert.Equal(bytes, received.ToArray());
+            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(response + "\0"), timeout.Token);
+        }
     }
 
     [Fact]
@@ -313,7 +440,7 @@ public sealed class Lab : IAsyncLifetime
             foreach (var (subject, id, role) in new[] { ("admin-a", Guid.NewGuid(), "admin"),
                 ("tech-a", TechA, "technician"), ("tech-chat", TechChat, "technician"),
                 ("report-reviewer", Guid.NewGuid(), "dispatcher"), ("report-publisher", Guid.NewGuid(), "dispatcher"),
-                ("report-author", Guid.NewGuid(), "admin") })
+                ("report-author", Guid.NewGuid(), "admin"), ("invoice-uploader", Guid.NewGuid(), "dispatcher") })
                 await Execute(conn, $"""
                     INSERT INTO ts.members VALUES ('{TenantA}','{id}','{Actor.SubjectKey(Issuer, subject)}','{subject}','{role}',true)
                     """);
@@ -322,6 +449,13 @@ public sealed class Lab : IAsyncLifetime
                 SELECT m.tenant_id, m.id, p.permission FROM ts.members m JOIN (VALUES
                     ('report-reviewer', 'report.approve'), ('report-publisher', 'report.publish'),
                     ('report-author', 'report.create'), ('report-author', 'report.approve')
+                ) p(name, permission) ON p.name = m.name WHERE m.tenant_id = '{TenantA}'
+                """);
+            await Execute(conn, $"""
+                INSERT INTO ts.invoice_permissions
+                SELECT m.tenant_id, m.id, p.permission FROM ts.members m JOIN (VALUES
+                    ('report-reviewer', 'invoice.approve'), ('report-publisher', 'invoice.publish'),
+                    ('invoice-uploader', 'invoice.upload'), ('invoice-uploader', 'invoice.approve')
                 ) p(name, permission) ON p.name = m.name WHERE m.tenant_id = '{TenantA}'
                 """);
         }
@@ -387,6 +521,44 @@ public sealed class Lab : IAsyncLifetime
         return await c.SendAsync(r);
     }
 
+    public async Task<HttpResponseMessage> Upload(HttpClient client, string path, byte[] content,
+        string name = "Rechnung.xml", Guid? id = null, int revision = 0, string? key = null)
+    {
+        var session = await client.GetFromJsonAsync<JsonElement>("/api/v1/session");
+        using var data = new ByteArrayContent(content);
+        data.Headers.ContentType = new MediaTypeHeaderValue("application/xml");
+        var query = id is null ? "" : $"?invoiceId={id}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, path + "/upload" + query) { Content = data };
+        request.Headers.Add("Origin", "https://localhost");
+        request.Headers.Add("X-Invoice-Name", Uri.EscapeDataString(name));
+        request.Headers.Add("X-CSRF-Token", session.GetProperty("csrfToken").GetString());
+        request.Headers.Add("Idempotency-Key", key ?? Guid.NewGuid().ToString());
+        request.Headers.TryAddWithoutValidation("If-Match", $"\"r{revision}\"");
+        return await client.SendAsync(request);
+    }
+
+    public async Task<long> VisibleInvoiceFiles(Guid tenant)
+    {
+        await using var connection = new NpgsqlConnection(Runtime);
+        await connection.OpenAsync();
+        await using var tx = await connection.BeginTransactionAsync();
+        await Scope(connection, tenant);
+        return await Read<long>(connection, "select count(*) from ts.invoice_files");
+    }
+
+    public static InvoiceScanner? LocalClamAv() =>
+        int.TryParse(Environment.GetEnvironmentVariable("TASKSERVICE_TEST_CLAMAV_PORT"), out var port)
+            ? new ClamAvScanner(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                { ["ClamAv:Host"] = "127.0.0.1", ["ClamAv:Port"] = port.ToString() }).Build())
+            : null;
+
+    public async Task<bool> ProcessInvoice(InvoiceScanner scanner)
+    {
+        await using var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(worker).Options);
+        return await InvoiceScanWorker.ProcessNext(db, TenantA, scanner, NullLogger.Instance, CancellationToken.None);
+    }
+
     public async Task<string> TokenFor(Guid request)
     {
         await using var conn = new NpgsqlConnection(admin);
@@ -417,7 +589,7 @@ public sealed class Lab : IAsyncLifetime
         return id;
     }
 
-    public async Task RunReportBrowser(string script)
+    public async Task RunBrowser(string script, bool invoice)
     {
         var webRoot = Environment.GetEnvironmentVariable("TASKSERVICE_BROWSER_WEBROOT")
             ?? throw new InvalidOperationException("Provide the absolute path to the built web application.");
@@ -438,11 +610,15 @@ public sealed class Lab : IAsyncLifetime
             .Addresses.Single(x => x.StartsWith("https://127.0.0.1:", StringComparison.Ordinal));
         var id = await Insert("in_progress", TechA);
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var scanner = LocalClamAv() ?? new FixtureInvoiceScanner(clean: true);
         var dispatch = Task.Run(async () =>
         {
             while (!timeout.IsCancellationRequested)
             {
-                await ProcessReport();
+                if (invoice)
+                    await ProcessInvoice(scanner);
+                else
+                    await ProcessReport();
                 await Task.Delay(500, timeout.Token);
             }
         });
@@ -528,4 +704,14 @@ public sealed class Lab : IAsyncLifetime
                 new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
         }
     }
+}
+
+public sealed class FixtureInvoiceScanner(bool clean) : InvoiceScanner
+{
+    public Task<bool> IsClean(byte[] content, CancellationToken ct) => Task.FromResult(clean);
+}
+
+public sealed class UnavailableInvoiceScanner : InvoiceScanner
+{
+    public Task<bool> IsClean(byte[] content, CancellationToken ct) => throw new IOException("Synthetic scanner outage.");
 }

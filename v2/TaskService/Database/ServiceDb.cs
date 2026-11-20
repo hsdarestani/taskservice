@@ -49,6 +49,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         model.Entity<Command>().ToTable("commands").HasKey(x => new { x.TenantId, x.Actor, x.Operation, x.Key });
         model.Entity<Outbox>().ToTable("outbox").HasKey(x => new { x.TenantId, x.Id });
         ConfigureReports(model);
+        ConfigureInvoices(model);
         foreach (var entity in model.Model.GetEntityTypes())
         foreach (var property in entity.GetProperties())
             property.SetColumnName(NameBoundary().Replace(property.Name, "_$1").ToLowerInvariant());

@@ -5,11 +5,19 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 scratch="$(mktemp -d)"
 umask 077
 cleanup() {
+  status=$?
+  if (( status != 0 )); then
+    docker compose -p taskservice-ci ps --all || true
+    docker compose -p taskservice-ci logs --tail=35 db api 2>/dev/null |
+      awk 'tolower($0) !~ /password|secret|token/' >&2 || true
+  fi
   docker compose -p taskservice-ci down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "$scratch"
 }
 trap cleanup EXIT
-cp -r "$root/v2/ops/compose.yaml" "$root/v2/ops/clamd.conf" "$root/v2/ops/postgres" "$scratch/"
+cp "$root/v2/ops/compose.yaml" "$scratch/"
+install -m 0644 "$root/v2/ops/clamd.conf" "$scratch/clamd.conf"
+install -D -m 0555 "$root/v2/ops/postgres/initialize.sh" "$scratch/postgres/initialize.sh"
 cd "$scratch"
 mkdir -p secrets
 export TASKSERVICE_IMAGE=taskservice:ci

@@ -5,7 +5,7 @@ Use these files for one isolated TaskService project under `/opt/taskservice`. I
 ## Before starting containers
 
 1. Verify the Publisher SSH host key against an independently trusted source. Run the Publisher capacity audit and review representative peaks, disk, backups and a recovery rehearsal. The Compose RAM limits total 5.125 GiB in steady service, including 3.5 GiB for ClamAV and its signature reload. The startup script reserves a further 1 GiB for existing workloads and is a fail-fast check, not a substitute for measured capacity approval. If these services do not fit, stop before deployment.
-2. Build the approved revision off-host. Record the immutable digest for the API, PostgreSQL 18 and supported official ClamAV image. Copy the contents of this directory to the deployment directory, alongside `TaskService/Database/grants.sql` from the same commit at `postgres/grants.sql`.
+2. Build the approved revision off-host. Record the immutable digest for the API, PostgreSQL 18 and supported official ClamAV image. Copy the contents of this directory to the deployment directory, keeping the non-secret `postgres/initialize.sh` readable and executable by the container user, alongside `TaskService/Database/grants.sql` from the same commit at `postgres/grants.sql`.
 3. Set the Compose interpolation file `.env` with `TASKSERVICE_IMAGE`, `TASKSERVICE_POSTGRES_IMAGE`, `TASKSERVICE_CLAMAV_IMAGE` and a free `TASKSERVICE_HTTP_PORT`. Protect `.env` and all `secrets/*.env` files with mode 0600. Use an approved secret store to provision them.
 
 | File | Settings |

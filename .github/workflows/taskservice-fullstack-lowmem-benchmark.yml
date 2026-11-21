@@ -38,10 +38,16 @@ jobs:
           } > secrets/api.env
           echo "ConnectionStrings__Worker=Host=db;Database=taskservice;Username=taskservice_worker;Password=$TASKSERVICE_WORKER_PASSWORD" > secrets/worker.env
           chmod 600 .env secrets/*.env
+          docker pull clamav/clamav:stable
+          docker create --name scanner-config-source clamav/clamav:stable >/dev/null
+          docker cp scanner-config-source:/etc/clamav/freshclam.conf ./freshclam-lowmem.conf
+          docker rm scanner-config-source >/dev/null
+          sed -i '/^TestDatabases[[:space:]]/d' freshclam-lowmem.conf
+          printf '\nTestDatabases no\n' >> freshclam-lowmem.conf
           cp compose-lowmem.experimental.yaml /tmp/compose-lowmem-ci.yaml
           sed -i '/cgroup_parent: taskservice.slice/d' /tmp/compose-lowmem-ci.yaml
           cp /tmp/compose-lowmem-ci.yaml ./compose-lowmem-ci.yaml
-          trap 'docker compose -f compose.yaml -f compose-lowmem-ci.yaml down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
+          trap 'status=$?; docker compose -f compose.yaml -f compose-lowmem-ci.yaml ps -a || true; if [ $status -ne 0 ]; then docker compose -f compose.yaml -f compose-lowmem-ci.yaml logs --tail=45 api worker scanner || true; fi; docker compose -f compose.yaml -f compose-lowmem-ci.yaml down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
           c=(docker compose -f compose.yaml -f compose-lowmem-ci.yaml)
           "${c[@]}" up -d --wait --wait-timeout 90 db
           "${c[@]}" run --rm migrate
@@ -50,9 +56,10 @@ jobs:
           sleep 20
           printf '== LIVE MEMORY SAMPLE ==\n'
           docker stats --no-stream --format '{{.Name}} | {{.MemUsage}} | {{.CPUPerc}}'
-          curl -fsS --max-time 8 http://127.0.0.1:18080/health/live
+          curl -fsS --max-time 8 -H 'Host: localhost' http://127.0.0.1:18080/health/live
           printf '\n== CONTAINER STATES ==\n'
           docker ps -a --filter label=com.docker.compose.project=taskservice --format '{{.Names}} | {{.Status}}'
+          [ "$(docker inspect -f '{{.State.Running}}' taskservice-worker-1)" = true ] || { echo WORKER_NOT_RUNNING; exit 1; }
           if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-db-1)" = true ]; then exit 1; fi
           if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-api-1)" = true ]; then exit 1; fi
           if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-worker-1)" = true ]; then exit 1; fi

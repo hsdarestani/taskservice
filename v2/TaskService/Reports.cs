@@ -153,11 +153,11 @@ public static partial class Endpoints
                 report.PublishedVersion = current.Version;
                 report.Revision++;
                 if (Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) &&
-                    publicBase.Scheme == "https" && !string.IsNullOrWhiteSpace(config["Mail:Host"]))
+                    publicBase.Scheme == "https" && (!string.IsNullOrWhiteSpace(config["Mail:Host"]) || NativeIdentity.MailHeld(config)))
                 {
                     var link = new Uri(publicBase, $"/unternehmen/{slug}/anfragen/{id}");
                     Workflow.QueueMail(db, tenant.Id, protection, request.ContactEmail, "Ein neuer Beleg ist verfügbar",
-                        $"Melden Sie sich an, um Ihre Belege einzusehen: {link}");
+                        $"Melden Sie sich an, um Ihre Belege einzusehen: {link}", NativeIdentity.MailHeld(config));
                 }
                 break;
             case "revoke":

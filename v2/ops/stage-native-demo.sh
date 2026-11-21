@@ -119,6 +119,11 @@ SELECT m.tenant_id,m.id,p.permission FROM ts.members m
 CROSS JOIN (VALUES ('invoice.approve'),('invoice.publish'),('invoice.read')) p(permission)
 WHERE m.name='Demo-Freigabe' AND m.tenant_id='cb28fdcc-7d6e-4f57-aa25-0cd3522ebe99'
 ON CONFLICT DO NOTHING;
+INSERT INTO ts.invoice_permissions (tenant_id,member_id,permission)
+SELECT m.tenant_id,m.id,p.permission FROM ts.members m
+CROSS JOIN (VALUES ('invoice.upload'),('invoice.read')) p(permission)
+WHERE m.name='Demo-Verwaltung' AND m.tenant_id='cb28fdcc-7d6e-4f57-aa25-0cd3522ebe99'
+ON CONFLICT DO NOTHING;
 SQL
 
 sed -i '/^\(Identity__Mode\|Identity__RecoveryMode\|Demo__Enabled\|Routing__DefaultTenantSlug\|PublicBaseUrl\|AllowedHosts\|Privacy__NoticeUrl\|Operations__TrustedProxies__0\|Mail__DeliveryMode\)=/d' secrets/api.env

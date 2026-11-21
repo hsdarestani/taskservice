@@ -275,6 +275,8 @@ public static partial class Endpoints
             x.TenantId == tenant.Id && x.RequestId == id && !x.Cancelled, ct);
         if (!Workflow.Actions(request, actor, appointment).Contains(body.Action))
             return ApiProblem.Error(409, "invalid_transition", "Diese Änderung ist im aktuellen Zustand nicht möglich.");
+        var previousCustomerState = Workflow.CustomerState(request.State);
+        var previousArrival = appointment?.ArrivalStatus;
         switch (body.Action)
         {
             case "triage": request.State = "triage"; break;
@@ -357,7 +359,9 @@ public static partial class Endpoints
 
         request.Revision++;
         Workflow.Record(db, request, actor, $"request.{body.Action}", body.Action == "reopen" ? body.Note!.Trim() : null);
-        if (request.CustomerKey is not null && body.Action is "schedule" or "assign" or "cancel" &&
+        if (request.CustomerKey is not null &&
+            (previousCustomerState != Workflow.CustomerState(request.State) || body.Action == "schedule" ||
+             body.Action == "arrival" && previousArrival != appointment?.ArrivalStatus) &&
             Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) && publicBase.Scheme == "https" &&
             !string.IsNullOrWhiteSpace(config["Mail:Host"]))
         {

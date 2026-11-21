@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -23,6 +24,7 @@ public sealed class ClamAvScanner(IConfiguration config) : InvoiceScanner
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
         var token = deadline.Token;
+        await RequireCurrentSignatures(config, token);
         using var socket = new TcpClient();
         await socket.ConnectAsync(host, config.GetValue("ClamAv:Port", 3310), token);
         await using var stream = socket.GetStream();
@@ -39,6 +41,40 @@ public sealed class ClamAvScanner(IConfiguration config) : InvoiceScanner
         await stream.WriteAsync(length, token);
         await stream.FlushAsync(token);
 
+        var response = await ReadReply(stream, token);
+        if (response == "stream: OK")
+            return true;
+        if (response.StartsWith("stream: ", StringComparison.Ordinal) &&
+            response.EndsWith(" FOUND", StringComparison.Ordinal))
+            return false;
+        throw new IOException("The scanner did not return a recognized verdict.");
+    }
+
+    public static async Task RequireCurrentSignatures(IConfiguration config, CancellationToken ct)
+    {
+        var maxAgeHours = config.GetValue<int?>("ClamAv:MaxSignatureAgeHours");
+        if (maxAgeHours is null)
+            return;
+        if (maxAgeHours is < 1 or > 168)
+            throw new InvalidOperationException("The configured malware signature age limit is outside the supported range.");
+
+        using var socket = new TcpClient();
+        await socket.ConnectAsync(config["ClamAv:Host"]!, config.GetValue("ClamAv:Port", 3310), ct);
+        await using var stream = socket.GetStream();
+        await stream.WriteAsync("zVERSION\0"u8.ToArray(), ct);
+        var response = await ReadReply(stream, ct);
+        var version = response.Split('/', 3);
+        var now = DateTimeOffset.UtcNow;
+        if (version.Length != 3 || !version[0].StartsWith("ClamAV ", StringComparison.Ordinal) ||
+            !long.TryParse(version[1], NumberStyles.None, CultureInfo.InvariantCulture, out var database) ||
+            database <= 0 || !DateTimeOffset.TryParseExact(version[2], "ddd MMM d HH:mm:ss yyyy",
+                CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var built) ||
+            built < now.AddHours(-maxAgeHours.Value) || built > now.AddHours(1))
+            throw new IOException("The scanner has no current signature database loaded.");
+    }
+
+    private static async Task<string> ReadReply(Stream stream, CancellationToken token)
+    {
         var reply = new byte[1024];
         var filled = 0;
         while (filled < reply.Length)
@@ -48,17 +84,10 @@ public sealed class ClamAvScanner(IConfiguration config) : InvoiceScanner
                 break;
             filled += read;
             var end = Array.IndexOf(reply, (byte)0, 0, filled);
-            if (end == -1)
-                continue;
-            var response = Encoding.ASCII.GetString(reply, 0, end);
-            if (response == "stream: OK")
-                return true;
-            if (response.StartsWith("stream: ", StringComparison.Ordinal) &&
-                response.EndsWith(" FOUND", StringComparison.Ordinal))
-                return false;
-            break;
+            if (end >= 0)
+                return Encoding.ASCII.GetString(reply, 0, end);
         }
-        throw new IOException("The scanner did not return a recognized verdict.");
+        throw new IOException("The scanner did not return a terminated response.");
     }
 }
 

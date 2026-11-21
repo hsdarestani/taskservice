@@ -55,9 +55,9 @@ public sealed record Actor(string Key, Member? Membership)
             return new(key, null);
         var member = await db.Members.AsNoTracking()
             .SingleOrDefaultAsync(m => m.TenantId == tenant.Id && m.SubjectKey == key && m.Active, ct);
-        var privilegedAcr = http.RequestServices.GetRequiredService<IConfiguration>()["Identity:PrivilegedAcr"];
+        var config = http.RequestServices.GetRequiredService<IConfiguration>();
         if (member?.Role is "admin" or "dispatcher" &&
-            (string.IsNullOrEmpty(privilegedAcr) || http.User.FindFirstValue(IdentitySessions.AssuranceClaim) != privilegedAcr))
+            !IdentitySessions.HasPrivilegedAssurance(http.User, config))
             member = null;
 
         return new(key, member);

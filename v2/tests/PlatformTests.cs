@@ -276,7 +276,8 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         using var environment = new TestEnvironment(new()
         {
             ["Identity__Authority"] = issuer, ["Identity__ClientId"] = clientId,
-            ["Identity__ClientSecret"] = "fixture-only", ["Identity__PrivilegedAcr"] = "verified-mfa"
+            ["Identity__ClientSecret"] = "fixture-only", ["Identity__PrivilegedAcr"] = "verified-mfa",
+            ["Identity__PrivilegedAmr"] = "mfa"
         });
         await using var host = lab.IsolatedHost().WithWebHostBuilder(web =>
         {
@@ -322,6 +323,9 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
                 && header.Contains("secure", StringComparison.OrdinalIgnoreCase) && header.Contains("httponly", StringComparison.OrdinalIgnoreCase));
         }
 
+        await Login("admin-a", "/unternehmen/lab/betrieb", workforce: true);
+        Assert.Equal(HttpStatusCode.Forbidden, (await browser.GetAsync(lab.Base() + "/team?session=workforce")).StatusCode);
+        provider.AddMfa = true;
         await Login("admin-a", "/unternehmen/lab/betrieb", workforce: true);
         Assert.False((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session")).GetProperty("signedIn").GetBoolean());
         Assert.True((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session?session=workforce")).GetProperty("signedIn").GetBoolean());
@@ -736,6 +740,45 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
                 received.Write(block);
             }
             Assert.Equal(bytes, received.ToArray());
+            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(response + "\0"), timeout.Token);
+        }
+    }
+
+    [Fact]
+    public async Task ClamAvRejectsStaleMissingOrFutureSignaturesBeforeScanning()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ClamAv:Host"] = "127.0.0.1",
+            ["ClamAv:Port"] = ((IPEndPoint)listener.LocalEndpoint).Port.ToString(),
+            ["ClamAv:MaxSignatureAgeHours"] = "72"
+        }).Build();
+        var scanner = new ClamAvScanner(config);
+        var next = Receive(Version(DateTimeOffset.UtcNow.AddHours(-1)));
+        await ClamAvScanner.RequireCurrentSignatures(config, timeout.Token);
+        await next;
+
+        foreach (var version in new[] { Version(DateTimeOffset.UtcNow.AddDays(-4)),
+            Version(DateTimeOffset.UtcNow.AddDays(1)), "ClamAV 1.4.3", "unauthorized" })
+        {
+            next = Receive(version);
+            await Assert.ThrowsAsync<IOException>(() => scanner.IsClean([1, 2, 3], timeout.Token));
+            await next;
+        }
+
+        static string Version(DateTimeOffset date) => "ClamAV 1.4.3/31455/" +
+            date.ToString("ddd MMM d HH:mm:ss yyyy", System.Globalization.CultureInfo.InvariantCulture);
+
+        async Task Receive(string response)
+        {
+            using var connection = await listener.AcceptTcpClientAsync(timeout.Token);
+            await using var stream = connection.GetStream();
+            var command = new byte[9];
+            await stream.ReadExactlyAsync(command, timeout.Token);
+            Assert.Equal("zVERSION\0"u8.ToArray(), command);
             await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(response + "\0"), timeout.Token);
         }
     }
@@ -1203,6 +1246,7 @@ internal sealed class FakeOidcProvider(string issuer, string clientId) : HttpMes
     public string Challenge { get; set; } = "";
     public string Nonce { get; set; } = "";
     public string Subject { get; set; } = "";
+    public bool AddMfa { get; set; }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -1212,13 +1256,19 @@ internal sealed class FakeOidcProvider(string issuer, string clientId) : HttpMes
         Assert.Equal("synthetic-signed-identity", body["code"].ToString());
         Assert.Equal(Challenge, Base64UrlEncoder.Encode(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(body["code_verifier"].ToString()))));
         var now = DateTime.UtcNow;
-        var token = new JwtSecurityToken(issuer, clientId,
+        List<System.Security.Claims.Claim> claims =
         [
             new System.Security.Claims.Claim("sub", Subject),
             new System.Security.Claims.Claim("nonce", Nonce),
             new System.Security.Claims.Claim("iat", new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
-            new System.Security.Claims.Claim("acr", "verified-mfa")
-        ], now.AddSeconds(-5), now.AddMinutes(10), new SigningCredentials(Key, SecurityAlgorithms.HmacSha256));
+            new System.Security.Claims.Claim("acr", "verified-mfa"),
+            new System.Security.Claims.Claim("amr", "pwd"),
+            new System.Security.Claims.Claim(IdentitySessions.AuthenticationMethodClaim, "mfa")
+        ];
+        if (AddMfa)
+            claims.Add(new("amr", "mfa"));
+        var token = new JwtSecurityToken(issuer, clientId, claims, now.AddSeconds(-5), now.AddMinutes(10),
+            new SigningCredentials(Key, SecurityAlgorithms.HmacSha256));
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = JsonContent.Create(new

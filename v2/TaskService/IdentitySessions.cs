@@ -13,6 +13,7 @@ public static class IdentitySessions
     public const string WorkforceOidc = "TaskServiceWorkforceOidc";
     public const string WorkforceClaim = "workforce";
     public const string AssuranceClaim = "ts:assurance";
+    public const string AuthenticationMethodClaim = "ts:amr";
     public const string ScopeHeader = "X-TaskService-Session";
 
     public static string CookieFor(HttpContext http) =>
@@ -23,6 +24,18 @@ public static class IdentitySessions
             : CookieAuthenticationDefaults.AuthenticationScheme;
 
     public static bool IsWorkforce(ClaimsPrincipal principal) => principal.FindFirstValue("ts:realm") == WorkforceClaim;
+
+    public static bool HasPrivilegedSettings(IConfiguration config) =>
+        !string.IsNullOrWhiteSpace(config["Identity:PrivilegedAcr"]) || config["Identity:PrivilegedAmr"] == "mfa";
+
+    public static bool HasPrivilegedAssurance(ClaimsPrincipal principal, IConfiguration config)
+    {
+        if (!IsWorkforce(principal) || !HasPrivilegedSettings(config))
+            return false;
+        return (config["Identity:PrivilegedAcr"] is not { Length: > 0 } acr ||
+                principal.FindFirstValue(AssuranceClaim) == acr) &&
+            (config["Identity:PrivilegedAmr"] != "mfa" || principal.HasClaim(AuthenticationMethodClaim, "mfa"));
+    }
 
     public static void ConfigureCookie(CookieAuthenticationOptions options, bool workforce)
     {
@@ -76,12 +89,16 @@ public static class IdentitySessions
                     return Task.CompletedTask;
                 }
                 var assurance = identity.FindFirst("acr")?.Value;
-                foreach (var claim in identity.Claims.Where(c => c.Type is "ts:issuer" or "ts:realm" or AssuranceClaim).ToArray())
+                var verifiedMfa = identity.FindAll("amr").Any(c => c.Value == "mfa");
+                foreach (var claim in identity.Claims.Where(c => c.Type is "ts:issuer" or "ts:realm" or AssuranceClaim
+                    or AuthenticationMethodClaim).ToArray())
                     identity.RemoveClaim(claim);
                 identity.AddClaim(new("ts:issuer", context.SecurityToken.Issuer));
                 identity.AddClaim(new("ts:realm", workforce ? WorkforceClaim : "customer"));
                 if (workforce && assurance is { Length: > 0 })
                     identity.AddClaim(new(AssuranceClaim, assurance));
+                if (workforce && verifiedMfa)
+                    identity.AddClaim(new(AuthenticationMethodClaim, "mfa"));
                 return Task.CompletedTask;
             }
         };

@@ -15,6 +15,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       DOTNET_gcServer: '0'
+      ClamAv__MaxSignatureAgeHours: '72'
   worker:
     cgroup_parent: taskservice.slice
     mem_limit: 256m
@@ -22,6 +23,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       DOTNET_gcServer: '0'
+      ClamAv__MaxSignatureAgeHours: '72'
   migrate:
     cgroup_parent: taskservice.slice
     mem_limit: 256m
@@ -32,6 +34,8 @@ services:
     # The application must fail closed: unscanned uploads remain quarantined.
     volumes:
       - ./freshclam-lowmem.conf:/etc/clamav/freshclam.conf:ro
+    environment:
+      TZ: Etc/UTC
     cgroup_parent: taskservice.slice
     mem_limit: 1344m
     cpus: 0.75

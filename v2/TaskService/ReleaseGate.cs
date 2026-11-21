@@ -15,7 +15,7 @@ public static class ReleaseGate
         PrivacyNotice(config) is not null &&
         HttpsUrl(config["PublicBaseUrl"]) is { AbsolutePath: "/", Query.Length: 0, Fragment.Length: 0 } &&
         HttpsUrl(config["Identity:Authority"]) is not null &&
-        !string.IsNullOrWhiteSpace(config["Identity:PrivilegedAcr"]) &&
+        IdentitySessions.HasPrivilegedSettings(config) &&
         !string.IsNullOrWhiteSpace(config.GetConnectionString("Platform")) &&
         config["Routing:DefaultTenantSlug"] is { Length: > 0 and <= 63 } &&
         !string.IsNullOrWhiteSpace(config["Mail:Host"]) && MailAddress.TryCreate(config["Mail:From"], out _) &&
@@ -52,7 +52,10 @@ public static class ReleaseGate
             await stream.WriteAsync("zPING\0"u8.ToArray(), token);
             var reply = new byte[5];
             await stream.ReadExactlyAsync(reply, token);
-            return reply.AsSpan().SequenceEqual("PONG\0"u8);
+            if (!reply.AsSpan().SequenceEqual("PONG\0"u8))
+                return false;
+            await ClamAvScanner.RequireCurrentSignatures(config, token);
+            return true;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is not OutOfMemoryException)
         {

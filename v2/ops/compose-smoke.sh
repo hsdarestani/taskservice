@@ -59,5 +59,6 @@ curl -fsS --max-time 5 "$live_url" >/dev/null
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:18080/health/ready)" = 503
 test "$(curl -sS -o /dev/null -w '%{redirect_url}' http://localhost:18080/)" = http://localhost:18080/unternehmen/release-fixture
 curl -fsS http://localhost:18080/api/v1/tenants/release-fixture | grep -F 'Service QA' >/dev/null
-test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:18080/api/v1/session)" = 200
+test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:18080/api/v1/login)" = 503
+test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:18080/api/v1/tenants/release-fixture/requests)" = 403
 echo 'Isolated container migration and root routing passed. Production readiness correctly rejected missing dependencies.'

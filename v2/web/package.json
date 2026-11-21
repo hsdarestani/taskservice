@@ -1,0 +1,21 @@
+{
+  "name": "taskservice-web",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "10.0.0",
+    "lucide-react": "1.77.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "5.9.3",
+    "vite": "^7.3.1"
+  }
+}

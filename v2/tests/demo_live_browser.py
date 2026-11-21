@@ -146,6 +146,7 @@ def main():
             creds = staff_credentials(alias)
             if alias == "platform":
                 page.goto(ORIGIN + "/anmelden?mode=workforce")
+                expect(page.get_by_label("Passwort", exact=True)).to_be_visible()
                 api(page, "/api/v1/auth/login", True, dict(email=creds["email"], password=creds["password"],
                     workforce=True), expected=401)
             sign_in(page, path, creds["email"], creds["password"], creds.get("totpSecretHex"), staff=True)

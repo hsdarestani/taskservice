@@ -1,0 +1,14 @@
+[Unit]
+Description=TaskService V2 isolated, low-memory containers
+
+[Slice]
+MemoryAccounting=yes
+# Throttle TaskService before it can squeeze other Publisher workloads.
+MemoryHigh=1300M
+# Hard aggregate cap, subordinate Docker scopes must have cgroup_parent=taskservice.slice.
+MemoryMax=1536M
+MemorySwapMax=0
+CPUAccounting=yes
+CPUQuota=150%
+TasksAccounting=yes
+TasksMax=300

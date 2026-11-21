@@ -76,7 +76,9 @@ def staff_credentials(alias):
 
 
 def revision(result):
-    return int(result["etag"][2:-1])
+    # Match the application UI. Edge compression can transform the ETag
+    # into a weak validator while the JSON revision remains unchanged.
+    return result["value"]["revision"]
 
 
 def await_state(test, seconds=35):

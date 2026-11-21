@@ -159,8 +159,12 @@ function RequestWizard({ categories, initial, api, session, base, onClose }: {
 
   useEffect(() => {
     const node = dialog.current!;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     node.showModal();
-    return () => { if (node.open) node.close(); };
+    return () => {
+      if (node.open) node.close();
+      trigger?.focus();
+    };
   }, []);
 
   useEffect(() => {

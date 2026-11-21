@@ -100,6 +100,10 @@ if (identityConfigured)
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+if (ProxyTrust.Options(app.Configuration) is { } proxyOptions)
+    app.UseForwardedHeaders(proxyOptions);
+if (app.Environment.IsProduction())
+    app.UseHsts();
 app.UseExceptionHandler();
 app.Use(async (http, next) =>
 {

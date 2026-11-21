@@ -6,7 +6,7 @@ The live Worker response at `taskservice.smarbiz.sbs/` was saved without mutatio
 | --- | --- | --- | --- | --- |
 | Consumer home and category images | Compared | Compared | Compared | Restored navy wordmark and blue promotional panel, category-first hierarchy and three image-led service cards. |
 | Service search and empty state | Exercised | Exercised | Exercised | Search matches service names and practical search terms. Results and reset follow customer input. |
-| Three-step intake wizard | Compared | Compared | Compared | Category preselection, progress, validation, back navigation and retained attachments checked. |
+| Three-step intake wizard | Compared | Compared | Compared | Category preselection, progress, validation, keyboard focus, Escape, back navigation and retained attachments checked. |
 | Photo submission | Exercised | Exercised | Exercised | API creates the request with photos. A separate authorization test exercises scanning, quarantine and download isolation. |
 | Company operations workspace | Exercised | Exercised | Exercised | Data-backed request table, search, sorting, tenant team invitations and dispatch use real API endpoints. |
 | Technician workspace | Exercised | Exercised | Exercised | Assigned work, daily-planning section, mobile navigation and report workflow. |

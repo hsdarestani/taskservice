@@ -19,6 +19,8 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -404,6 +406,38 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         await using var transaction = await db.BeginTransactionAsync();
         await Lab.Scope(db, lab.TenantA);
         Assert.Equal(2L, await Lab.Read<long>(db, $"select count(*) from ts.integration_inbox where connection_id='{connection}'"));
+    }
+
+    [Fact]
+    public async Task ForwardedHeadersAffectHttpsAndClientAddressOnlyThroughConfiguredProxy()
+    {
+        var empty = new ConfigurationBuilder().Build();
+        Assert.Null(ProxyTrust.Options(empty));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            { ["Operations:TrustedProxies:0"] = "192.0.2.10" }).Build();
+        var middleware = new ForwardedHeadersMiddleware(_ => Task.CompletedTask, NullLoggerFactory.Instance,
+            Options.Create(ProxyTrust.Options(config)!));
+
+        async Task<DefaultHttpContext> Check(string origin)
+        {
+            var request = new DefaultHttpContext();
+            request.Connection.RemoteIpAddress = IPAddress.Parse(origin);
+            request.Request.Scheme = "http";
+            request.Request.Headers["X-Forwarded-For"] = "192.0.2.123";
+            request.Request.Headers["X-Forwarded-Proto"] = "https";
+            request.Request.Headers["X-Forwarded-Host"] = "noncanonical.example.invalid";
+            request.Request.Host = HostString.FromUriComponent("taskservice.example.invalid");
+            await middleware.Invoke(request);
+            return request;
+        }
+
+        var untrusted = await Check("192.0.2.11");
+        Assert.Equal("http", untrusted.Request.Scheme);
+        Assert.Equal(IPAddress.Parse("192.0.2.11"), untrusted.Connection.RemoteIpAddress);
+        var trusted = await Check("192.0.2.10");
+        Assert.Equal("https", trusted.Request.Scheme);
+        Assert.Equal(IPAddress.Parse("192.0.2.123"), trusted.Connection.RemoteIpAddress);
+        Assert.Equal("taskservice.example.invalid", trusted.Request.Host.Host);
     }
 
     [Fact]

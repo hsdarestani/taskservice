@@ -119,10 +119,11 @@ export function CustomerHome({ base, api, company, session, categories, catalogE
         <div><ClipboardList aria-hidden/><strong>Anfragen im Blick</strong><p>Verfolge Termine und Nachrichten im Kundenkonto.</p></div>
       </section>
     </main>
-    <footer className="customer-footer"><Wordmark href={base}/><a href={base + '/konto'}>Mein Konto</a></footer>
+    <footer className="customer-footer"><Wordmark href={base}/><a href={base + '/konto'}>Mein Konto</a>
+      {company.privacyNoticeUrl && <a href={company.privacyNoticeUrl}>Datenschutz</a>}</footer>
     <CustomerNav base={base} onRequest={start}/>
     {request !== null && <RequestWizard categories={categories ?? []} initial={request} api={api} base={base}
-      session={session} onClose={close}/>}
+      session={session} privacyNoticeUrl={company.privacyNoticeUrl} onClose={close}/>}
   </div>;
 }
 
@@ -139,8 +140,8 @@ function photoBody(file: File) {
   });
 }
 
-function RequestWizard({ categories, initial, api, session, base, onClose }: {
-  categories: ServiceCategory[]; initial: string; api: string; base: string; session: Session; onClose: () => void;
+function RequestWizard({ categories, initial, api, session, base, privacyNoticeUrl, onClose }: {
+  categories: ServiceCategory[]; initial: string; api: string; base: string; session: Session; privacyNoticeUrl?: string; onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -267,6 +268,7 @@ function RequestWizard({ categories, initial, api, session, base, onClose }: {
               onChange={event => setPhone(event.target.value)}/></label>
             <label>E-Mail-Adresse<input autoComplete="email" type="email" value={email} required maxLength={254}
               onChange={event => setEmail(event.target.value)}/></label>
+            {privacyNoticeUrl && <p><a href={privacyNoticeUrl} target="_blank" rel="noopener noreferrer">Datenschutzhinweise lesen</a></p>}
             <label className="contact-confirmation"><input type="checkbox" required/>
               Der Servicebetrieb darf mich zu dieser Anfrage kontaktieren.
             </label>

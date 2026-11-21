@@ -54,4 +54,6 @@ jobs:
         env:
           TASKSERVICE_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
       - run: npm audit --prefix v2/web --audit-level=high
-      - run: docker build -f v2/Dockerfile .
+      - run: docker build -f v2/Dockerfile -t taskservice:ci .
+      - name: Verify the isolated deployment configuration
+        run: bash v2/ops/compose-smoke.sh

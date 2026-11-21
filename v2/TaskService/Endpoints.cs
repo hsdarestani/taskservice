@@ -64,13 +64,13 @@ public static partial class Endpoints
         }, contentType: "application/manifest+json");
     }
 
-    private static async Task<IResult> TenantView(ServiceDb db, string slug, HttpContext http, CancellationToken ct)
+    private static async Task<IResult> TenantView(ServiceDb db, string slug, HttpContext http, IConfiguration config, CancellationToken ct)
     {
         if (await FindTenant(db, slug, ct) is not { } tenant)
             return ApiProblem.NotFound();
         await using var tx = await db.ForTenant(tenant.Id, ct);
         var actor = await Actor.Read(db, tenant, http, ct);
-        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, Role = actor.Membership?.Role });
+        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, Role = actor.Membership?.Role, PrivacyNoticeUrl = ReleaseGate.PrivacyNotice(config) });
     }
 
     private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, string? q, HttpContext http, CancellationToken ct)
@@ -178,6 +178,8 @@ public static partial class Endpoints
         if (!Valid(body.Title, 160) || !Valid(body.Description, 4000) || !Valid(body.Email, 254) ||
             !MailAddress.TryCreate(body.Email, out var mail) || mail.Address != body.Email)
             return ApiProblem.Error(422, "invalid_request", "Bitte ergänzen Sie Betreff, Beschreibung und eine gültige E-Mail-Adresse.");
+        if (config.GetValue<bool>("Operations:RequireProductionReadiness") && !ReleaseGate.HasSettings(config))
+            return ApiProblem.Error(503, "intake_unavailable", "Die Anfrage kann derzeit nicht entgegengenommen werden.");
         if (!ValidIntake(body))
             return ApiProblem.Error(422, "invalid_intake_details", "Bitte prüfen Sie Service, Kontaktdaten und die ausgewählten Fotos.");
         if (!Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) ||

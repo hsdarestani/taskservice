@@ -9,7 +9,7 @@ export function sessionUrl(url: string): string {
 }
 
 export type Session = { signedIn: boolean; csrfToken: string };
-export type Company = { slug: string; name: string; accent: string; role?: string };
+export type Company = { slug: string; name: string; accent: string; role?: string; privacyNoticeUrl?: string };
 export type AppointmentView = {
   startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;
   updatedAt?: string; customerConfirmedAt?: string; customerNote?: string;

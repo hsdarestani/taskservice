@@ -6,3 +6,6 @@
 .env
 .env.*
 !.env.example
+
+v2/ops/secrets/
+v2/ops/.env

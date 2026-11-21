@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using TaskService.Database;
 using TaskService;
 
@@ -126,7 +127,6 @@ app.Use(async (http, next) =>
     }
     await next();
 });
-app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
@@ -134,8 +134,10 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.MapOpenApi("/api/openapi/{documentName}.json");
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
-app.MapGet("/health/ready", async (ServiceDb db, CancellationToken ct) =>
-    await db.Database.CanConnectAsync(ct) && identityConfigured
+var enforceRelease = app.Configuration.GetValue<bool>("Operations:RequireProductionReadiness");
+app.MapGet("/health/ready", async (ServiceDb db, IOptionsMonitor<OpenIdConnectOptions> oidc, CancellationToken ct) =>
+    identityConfigured && (enforceRelease ? await ReleaseGate.IsReady(db, app.Configuration, oidc, ct)
+        : await db.Database.CanConnectAsync(ct))
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(503));
 app.MapGet("/api/v1/session", (HttpContext http, IAntiforgery antiforgery) =>
@@ -156,6 +158,11 @@ app.MapHub<ConversationHub>("/hubs/conversations", options =>
     options.CloseOnAuthenticationExpiration = true;
     options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
 });
+if (app.Configuration["Routing:DefaultTenantSlug"] is { Length: > 0 and <= 63 } defaultTenant)
+    app.MapGet("/", async (ServiceDb db, CancellationToken ct) =>
+        await db.Tenants.AnyAsync(t => t.Active && t.Slug == defaultTenant, ct)
+            ? Results.Redirect("/unternehmen/" + Uri.EscapeDataString(defaultTenant))
+            : Results.StatusCode(503));
 app.MapFallback("/api/{**path}", () => Results.NotFound());
 app.MapFallbackToFile("index.html");
 await app.RunAsync();

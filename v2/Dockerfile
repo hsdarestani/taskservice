@@ -16,7 +16,7 @@ RUN dotnet publish --no-restore -c Release -o /out
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.15
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core curl \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -m 0700 -o app -g app /var/lib/taskservice/keys
 COPY --from=build /out/ ./

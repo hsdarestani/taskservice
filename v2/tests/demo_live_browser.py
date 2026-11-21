@@ -193,7 +193,7 @@ def main():
         invoice = '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"><ID>DEMO</ID></Invoice>'
         added = api(company, ticket + "/invoices/upload", True, expected=201, revision=0, upload=invoice)
         invoice_path = ticket + "/invoices/" + added["value"]["id"]
-        await_state(lambda: api(reviewer, invoice_path, True)["value"]["scanStatus"] == "clean")
+        await_state(lambda: api(reviewer, invoice_path, True)["value"]["items"][0]["scanStatus"] == "clean")
         api(reviewer, invoice_path + "/commands", True, dict(action="approve", version=1), revision=1)
         api(reviewer, invoice_path + "/commands", True, dict(action="publish", version=1), revision=2)
         assert api(customer, invoice_path + "/versions/1/download")["value"] == invoice

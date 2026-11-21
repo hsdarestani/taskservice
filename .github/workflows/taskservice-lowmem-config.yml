@@ -30,8 +30,10 @@ jobs:
           for name,mib in expected.items():
               s=services[name]
               assert s['cgroup_parent']=='taskservice.slice',(name,s)
-              assert s['mem_limit']<=mib*1024*1024,(name,s['mem_limit'])
-              print('PROFILE',name,'limit_mib',round(s['mem_limit']/2**20),'parent',s['cgroup_parent'])
+              raw=s['mem_limit']
+              actual=int(raw[:-1]) if isinstance(raw,str) and raw.endswith('m') else int(raw)//1048576
+              assert actual<=mib,(name,raw)
+              print('PROFILE',name,'limit_mib',actual,'parent',s['cgroup_parent'])
           assert not services['db'].get('ports')
           assert not services['scanner'].get('ports')
           assert services['api']['ports'][0]['host_ip']=='127.0.0.1'

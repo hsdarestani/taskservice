@@ -27,6 +27,11 @@ services:
     mem_limit: 256m
     cpus: 0.50
   scanner:
+    # Create this file from the pinned ClamAV image, changing only TestDatabases to no.
+    # This reduces update-time memory but may leave scanning unavailable on corrupt updates.
+    # The application must fail closed: unscanned uploads remain quarantined.
+    volumes:
+      - ./freshclam-lowmem.conf:/etc/clamav/freshclam.conf:ro
     cgroup_parent: taskservice.slice
     mem_limit: 1344m
     cpus: 0.75

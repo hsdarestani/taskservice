@@ -4,7 +4,7 @@ x-app: &app
   image: ${TASKSERVICE_IMAGE:?Set a verified TaskService release image}
   init: true
   read_only: true
-  tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+  tmpfs: ['/tmp:rw,noexec,nosuid,size=64m']
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
 

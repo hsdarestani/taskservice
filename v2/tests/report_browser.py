@@ -98,7 +98,10 @@ with sync_playwright() as playwright:
         )
         page = context.new_page()
         page.set_default_timeout(10000)
-        page.goto(origin + path, wait_until="domcontentloaded")
+        workspace_path = path.replace("/lab/anfragen/", "/lab/betrieb/anfragen/") if privileged else (
+            path.replace("/lab/anfragen/", "/lab/technik/anfragen/") if subject == "tech-a" else path
+        )
+        page.goto(origin + workspace_path, wait_until="domcontentloaded")
         panel = page.locator("section").filter(has=page.get_by_role("heading", name="Arbeitsbericht", exact=True))
         expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel

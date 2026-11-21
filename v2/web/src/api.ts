@@ -1,3 +1,13 @@
+const route = location.pathname.split('/').filter(Boolean);
+const view = new URLSearchParams(location.search).get('ansicht');
+const workforce = route[0] === 'plattform' || ['betrieb', 'technik', 'einladungen'].includes(route[2]) ||
+  route[2] === 'anfragen' && (view === 'betrieb' || view === 'technik');
+const sessionHeaders: Record<string, string> = workforce ? { 'X-TaskService-Session': 'workforce' } : {};
+
+export function sessionUrl(url: string): string {
+  return workforce ? url + (url.includes('?') ? '&' : '?') + 'session=workforce' : url;
+}
+
 export type Session = { signedIn: boolean; csrfToken: string };
 export type Company = { slug: string; name: string; accent: string; role?: string };
 export type AppointmentView = {
@@ -58,6 +68,7 @@ export async function uploadInvoice(url: string, file: File, csrfToken: string, 
   return parse(await fetch(target, {
     method: 'POST',
     headers: {
+      ...sessionHeaders,
       'Content-Type': file.name.toLowerCase().endsWith('.xml') ? 'application/xml' : 'application/pdf',
       'X-Invoice-Name': encodeURIComponent(file.name),
       'X-CSRF-Token': csrfToken,
@@ -69,11 +80,12 @@ export async function uploadInvoice(url: string, file: File, csrfToken: string, 
 }
 
 export async function get<T>(url: string): Promise<T> {
-  return parse<T>(await fetch(url, { headers: { Accept: 'application/json' } }));
+  return parse<T>(await fetch(url, { headers: { ...sessionHeaders, Accept: 'application/json' } }));
 }
 
 export async function send<T>(url: string, body: unknown, csrfToken: string, key = crypto.randomUUID(), revision?: number): Promise<T> {
   const headers: Record<string, string> = {
+    ...sessionHeaders,
     'Content-Type': 'application/json',
     'X-CSRF-Token': csrfToken,
     'Idempotency-Key': key,

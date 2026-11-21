@@ -151,8 +151,8 @@ public static partial class Endpoints
     }
 
     private static string? Operator(HttpContext http, IConfiguration config) =>
-        config["Identity:PrivilegedAcr"] is { Length: > 0 } acr &&
-        http.User.FindFirst("acr")?.Value == acr && http.User.HasClaim("taskservice_role", "platform_admin")
+        IdentitySessions.IsWorkforce(http.User) && config["Identity:PrivilegedAcr"] is { Length: > 0 } acr &&
+        http.User.FindFirst(IdentitySessions.AssuranceClaim)?.Value == acr && http.User.HasClaim("taskservice_role", "platform_admin")
             ? Actor.Subject(http.User)
             : null;
 

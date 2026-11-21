@@ -25,7 +25,8 @@ with sync_playwright() as playwright:
             ignore_https_errors=True, extra_http_headers=headers,
         )
         page = context.new_page()
-        page.goto(origin + path, wait_until="domcontentloaded")
+        workspace_path = path.replace("/lab/anfragen/", "/lab/betrieb/anfragen/") if privileged else path
+        page.goto(origin + workspace_path, wait_until="domcontentloaded")
         panel = page.locator("section").filter(has=page.get_by_role("heading", name="Rechnungen", exact=True))
         expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel

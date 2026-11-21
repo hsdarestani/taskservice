@@ -1,9 +1,7 @@
-using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OAuth.Claims;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
@@ -80,57 +78,16 @@ builder.Services.AddRateLimiter(options =>
 var identityConfigured = new[] { "Authority", "ClientId", "ClientSecret" }
     .All(key => !string.IsNullOrWhiteSpace(builder.Configuration[$"Identity:{key}"]));
 
-var authentication = builder.Services
-    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options =>
-    {
-        options.Cookie.Name = "__Host-taskservice";
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
-        options.Cookie.Path = "/";
-        options.Cookie.SameSite = SameSiteMode.Lax;
-        options.ExpireTimeSpan = TimeSpan.FromHours(4);
-        options.SlidingExpiration = false;
-    options.Events.OnRedirectToLogin = context =>
-    {
-        context.Response.StatusCode = 401;
-        return Task.CompletedTask;
-    };
-    });
+var authentication = builder.Services.AddAuthentication(IdentitySessions.Selector)
+    .AddPolicyScheme(IdentitySessions.Selector, "TaskService session", options => options.ForwardDefaultSelector = IdentitySessions.CookieFor)
+    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options => IdentitySessions.ConfigureCookie(options, workforce: false))
+    .AddCookie(IdentitySessions.WorkforceCookie, options => IdentitySessions.ConfigureCookie(options, workforce: true));
 if (identityConfigured)
 {
-    authentication.AddOpenIdConnect(options =>
-    {
-        options.Authority = builder.Configuration["Identity:Authority"];
-        options.ClientId = builder.Configuration["Identity:ClientId"];
-        options.ClientSecret = builder.Configuration["Identity:ClientSecret"];
-        options.ResponseType = "code";
-        options.UsePkce = true;
-        options.MapInboundClaims = false;
-        options.SaveTokens = false;
-        options.Scope.Add("email");
-        options.GetClaimsFromUserInfoEndpoint = builder.Configuration.GetValue<bool>("Identity:UseUserInfo");
-        if (options.GetClaimsFromUserInfoEndpoint)
-            options.ClaimActions.MapUniqueJsonKey("email_verified", "email_verified");
-        options.Events = new OpenIdConnectEvents
-        {
-            OnRedirectToIdentityProvider = context =>
-            {
-                if (context.Properties.Items.TryGetValue("taskservice:workforce", out var workforce) && workforce == "yes" &&
-                    builder.Configuration["Identity:PrivilegedAcr"] is { Length: > 0 } acr)
-                    context.ProtocolMessage.AcrValues = acr;
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = context =>
-            {
-                if (context.Principal?.Identity is not ClaimsIdentity identity ||
-                    context.Principal.FindFirst("sub") is not { Value.Length: > 0 })
-                    context.Fail("OIDC subject required.");
-                else
-                    identity.AddClaim(new System.Security.Claims.Claim("ts:issuer", context.SecurityToken.Issuer));
-                return Task.CompletedTask;
-            }
-        };
-    });
+    authentication.AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme,
+        options => IdentitySessions.ConfigureOidc(options, builder.Configuration, workforce: false));
+    authentication.AddOpenIdConnect(IdentitySessions.WorkforceOidc,
+        options => IdentitySessions.ConfigureOidc(options, builder.Configuration, workforce: true));
 }
 builder.Services.AddAuthorization();
 
@@ -176,12 +133,11 @@ app.MapGet("/api/v1/login", (string? returnTo, string? mode) =>
     if (!identityConfigured)
         return ApiProblem.Error(503, "identity_unavailable", "Die Anmeldung ist noch nicht konfiguriert.");
     var properties = new AuthenticationProperties { RedirectUri = SafeReturnPath(returnTo) };
-    if (mode == "workforce")
-        properties.Items["taskservice:workforce"] = "yes";
-    return Results.Challenge(properties, [OpenIdConnectDefaults.AuthenticationScheme]);
+    var scheme = mode == IdentitySessions.WorkforceClaim ? IdentitySessions.WorkforceOidc : OpenIdConnectDefaults.AuthenticationScheme;
+    return Results.Challenge(properties, [scheme]);
 });
-app.MapPost("/api/v1/logout", () => Results.SignOut(authenticationSchemes:
-    [CookieAuthenticationDefaults.AuthenticationScheme])).AddEndpointFilter<CsrfFilter>();
+app.MapPost("/api/v1/logout", (HttpContext http) => Results.SignOut(authenticationSchemes:
+    [IdentitySessions.CookieFor(http)])).AddEndpointFilter<CsrfFilter>();
 app.MapTaskService();
 app.MapHub<ConversationHub>("/hubs/conversations", options =>
 {

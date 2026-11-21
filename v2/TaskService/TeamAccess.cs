@@ -137,7 +137,7 @@ public static partial class Endpoints
         CancellationToken ct)
     {
         var email = http.User.FindFirstValue("email");
-        if (Actor.Subject(http.User) is not { } actorKey || email is not { Length: > 0 and <= 254 } ||
+        if (!IdentitySessions.IsWorkforce(http.User) || Actor.Subject(http.User) is not { } actorKey || email is not { Length: > 0 and <= 254 } ||
             !bool.TryParse(http.User.FindFirstValue("email_verified"), out var verified) || !verified ||
             body.Token is not { Length: 64 } || !body.Token.All(Uri.IsHexDigit) ||
             await FindTenant(db, slug, ct) is not { } tenant)
@@ -153,7 +153,7 @@ public static partial class Endpoints
         if (invite.Role == "admin")
         {
             var requiredAcr = http.RequestServices.GetRequiredService<IConfiguration>()["Identity:PrivilegedAcr"];
-            if (string.IsNullOrEmpty(requiredAcr) || http.User.FindFirstValue("acr") != requiredAcr)
+            if (string.IsNullOrEmpty(requiredAcr) || http.User.FindFirstValue(IdentitySessions.AssuranceClaim) != requiredAcr)
                 return ApiProblem.Error(403, "assurance_required", "Bestätigen Sie die Anmeldung mit dem zweiten Faktor.");
             if (await db.Members.AnyAsync(x => x.TenantId == tenant.Id && x.Role == "admin" && x.Active, ct))
                 return ApiProblem.Error(409, "admin_exists", "Das Unternehmen verfügt bereits über eine Administration.");

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
-import { send, uploadInvoice } from './api';
+import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
 import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
@@ -33,7 +33,9 @@ const slug = path[0] === 'unternehmen' ? path[1] : undefined;
 const base = slug ? '/unternehmen/' + encodeURIComponent(slug) : '';
 const api = slug ? '/api/v1/tenants/' + encodeURIComponent(slug) : '';
 const login = '/api/v1/login?returnTo=' + encodeURIComponent(location.pathname);
-const requestId = path[2] === 'anfragen' ? path[3] : undefined;
+const staffRequest = (path[2] === 'betrieb' || path[2] === 'technik') && path[3] === 'anfragen';
+const requestId = path[2] === 'anfragen' ? path[3] : staffRequest ? path[4] : undefined;
+const isClaimLink = path[2] === 'anfragen' && path[4] === 'bestaetigen';
 
 function Notice({ text }: { text: string }) {
   return text ? <p className="notice" role="alert">{text}</p> : null;
@@ -52,10 +54,10 @@ function App() {
   const company = useLoad<Company>(slug ? api : undefined, session.data?.signedIn ? 1 : 0);
   const role = company.data?.role;
   const requestedView = new URLSearchParams(location.search).get('ansicht');
-  const staffDetail = requestId && path[4] !== 'bestaetigen' && requestedView !== 'konto';
+  const staffDetail = requestId && !isClaimLink && requestedView !== 'konto';
   const portal: Portal = path[0] === 'plattform' ? 'platform'
-    : path[2] === 'technik' || staffDetail && role === 'technician' ? 'technician'
-    : path[2] === 'betrieb' || staffDetail && (role === 'admin' || role === 'dispatcher') ? 'company'
+    : path[2] === 'technik' || staffDetail && (requestedView === 'technik' || role === 'technician') ? 'technician'
+    : path[2] === 'betrieb' || staffDetail && (requestedView === 'betrieb' || role === 'admin' || role === 'dispatcher') ? 'company'
     : 'customer';
   const atCustomerHome = portal === 'customer' && !path[2] && Boolean(slug);
   const catalog = useLoad<ServiceCategory[]>(atCustomerHome ? api + '/catalog' : undefined);
@@ -79,7 +81,7 @@ function App() {
   </>;
   const body = path[2] === 'einladungen' && path[3]
     ? <AcceptInvitation endpoint={api} base={base} login={loginLink + '&mode=workforce'} session={session.data} id={path[3]}/>
-    : requestId && path[4] === 'bestaetigen'
+    : requestId && isClaimLink
     ? <ClaimRequest session={session.data} id={requestId}/>
     : requestId ? <RequestDetail session={session.data} id={requestId} portal={portal}/>
     : portal === 'platform' ? <Platform session={session.data}/>
@@ -299,7 +301,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       : sort === 'appointment' ? (Date.parse(a.appointment?.startsAt ?? '') || Infinity) -
         (Date.parse(b.appointment?.startsAt ?? '') || Infinity) : Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const filters = [...new Set(result.map(row => row.state))];
-  const detailPath = (row: RequestRow) => base + '/anfragen/' + row.id + '?ansicht=' + (isCompany ? 'betrieb' : 'technik');
+  const detailPath = (row: RequestRow) => base + (isCompany ? '/betrieb' : '/technik') + '/anfragen/' + row.id;
   if (!session.signedIn) return <Panel><h1>{isCompany ? 'Servicebetrieb' : 'Technik'}</h1><p>Melden Sie sich mit Ihrem Arbeitskonto an.</p>
     <a href={login + '&mode=workforce'} className="primary">Anmelden</a></Panel>;
   if (!allowed) return <Panel><h1>Zugang zum Arbeitsbereich</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
@@ -387,7 +389,8 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
   const [revision, setRevision] = useState(0);
   const detail = useLoad<Detail>(session.signedIn ? api + '/requests/' + id : undefined, revision);
   const row = detail.data;
-  if (!session.signedIn) return <Panel><h1>Servicevorgang</h1><a href={login}>Anmelden</a></Panel>;
+  if (!session.signedIn) return <Panel><h1>Servicevorgang</h1>
+    <a href={portal === 'customer' ? login : login + '&mode=workforce'}>Anmelden</a></Panel>;
   if (!row) return <Panel>{detail.error ? <Notice text={detail.error}/> : <p role="status">Vorgang wird geladen …</p>}</Panel>;
   return <>
     <div className="workspace-heading"><a href={base + (portal === 'company' ? '/betrieb#requests' : portal === 'technician' ? '/technik#requests' : '/konto')}>Übersicht</a>
@@ -397,7 +400,7 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
         {row.contactName && <p><strong>Kontakt</strong><br/>{row.contactName}{row.contactPhone && <><br/>{row.contactPhone}</>}</p>}
         {row.photos?.length > 0 && <div className="attached-photos"><h3>Fotos zur Anfrage</h3><ul>
           {row.photos.map(photo => <li key={photo.id}>{photo.scanStatus === 'clean'
-            ? <a href={api + '/requests/' + id + '/photos/' + photo.id}>Foto {photo.ordinal} herunterladen</a>
+            ? <a href={sessionUrl(api + '/requests/' + id + '/photos/' + photo.id)}>Foto {photo.ordinal} herunterladen</a>
             : 'Foto ' + photo.ordinal + (photo.scanStatus === 'pending' ? ' · Wird geprüft' : ' · Nicht verfügbar')}</li>)}
         </ul></div>}
         {row.appointment && <><h2>Einsatztermin</h2>
@@ -435,7 +438,7 @@ function ReportPanel({ id, session }: { id: string; session: Session }) {
   const report = useLoad<ReportView>(url, reload);
   const data = report.data;
   const current = data?.versions?.[0];
-  const download = (version: number) => url + '/versions/' + version + '/pdf';
+  const download = (version: number) => sessionUrl(url + '/versions/' + version + '/pdf');
 
   return <Panel>
     <div className="panel-heading"><h2>Arbeitsbericht</h2>
@@ -567,7 +570,7 @@ function InvoiceRow({ invoice, url, session, refresh }: { invoice: InvoiceItem; 
         ? `Version ${invoice.version} · ${invoiceStatus[invoice.status]} · ${invoiceScan[invoice.scanStatus]}`
         : invoice.publishedAt && 'Veröffentlicht am ' + date(invoice.publishedAt)}</small>
     </p>
-    {invoice.canDownload && <p><a href={itemUrl + '/versions/' + invoice.version + '/download'}>Original herunterladen</a></p>}
+    {invoice.canDownload && <p><a href={sessionUrl(itemUrl + '/versions/' + invoice.version + '/download')}>Original herunterladen</a></p>}
     {internal && <button className="link" aria-expanded={showHistory} onClick={() => { setShowHistory(!showHistory); setCursor(undefined); }}>
       Versionsverlauf {showHistory ? 'ausblenden' : 'anzeigen'}
     </button>}
@@ -684,7 +687,7 @@ function Chat({ session, id, channel, title }: { session: Session; id?: string; 
   useEffect(() => {
     if (!slug) return;
     const hub = new HubConnectionBuilder()
-      .withUrl('/hubs/conversations', { skipNegotiation: true, transport: HttpTransportType.WebSockets })
+      .withUrl(sessionUrl('/hubs/conversations'), { skipNegotiation: true, transport: HttpTransportType.WebSockets })
       .configureLogging(LogLevel.None)
       .withAutomaticReconnect()
       .build();

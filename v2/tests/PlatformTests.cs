@@ -266,7 +266,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
-    public async Task OidcChallengeUsesPkceRequestsWorkforceAssuranceAndEstablishesAccountCookie()
+    public async Task OidcPkceUsesSeparateCustomerAndWorkforceCookiesAndLogout()
     {
         const string issuer = "https://identity.example.invalid";
         const string clientId = "taskservice-test-client";
@@ -280,40 +280,66 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         {
             web.ConfigureServices(services =>
             {
-                services.PostConfigure<AuthenticationOptions>(o => o.DefaultAuthenticateScheme = CookieAuthenticationDefaults.AuthenticationScheme);
-                services.PostConfigure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
-                {
-                    options.Backchannel = new HttpClient(provider, disposeHandler: false);
-                    var metadata = new OpenIdConnectConfiguration
+                services.PostConfigure<AuthenticationOptions>(o => o.DefaultAuthenticateScheme = IdentitySessions.Selector);
+                foreach (var scheme in new[] { OpenIdConnectDefaults.AuthenticationScheme, IdentitySessions.WorkforceOidc })
+                    services.PostConfigure<OpenIdConnectOptions>(scheme, options =>
                     {
-                        Issuer = issuer, AuthorizationEndpoint = issuer + "/authorize", TokenEndpoint = issuer + "/token"
-                    };
-                    metadata.SigningKeys.Add(provider.Key);
-                    options.ConfigurationManager = new StaticConfigurationManager<OpenIdConnectConfiguration>(metadata);
-                });
+                        options.Backchannel = new HttpClient(provider, disposeHandler: false);
+                        var metadata = new OpenIdConnectConfiguration
+                        {
+                            Issuer = issuer, AuthorizationEndpoint = issuer + "/authorize", TokenEndpoint = issuer + "/token"
+                        };
+                        metadata.SigningKeys.Add(provider.Key);
+                        options.ConfigurationManager = new StaticConfigurationManager<OpenIdConnectConfiguration>(metadata);
+                    });
             });
         });
         using var browser = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
-        var entry = await browser.GetAsync("/api/v1/login?returnTo=%2Funternehmen%2Flab%2Fkonto&mode=workforce");
-        Assert.Equal(HttpStatusCode.Redirect, entry.StatusCode);
-        Assert.Equal(issuer + "/authorize", entry.Headers.Location!.GetLeftPart(UriPartial.Path));
-        var redirect = QueryHelpers.ParseQuery(entry.Headers.Location.Query);
-        Assert.Equal("code", redirect["response_type"].ToString());
-        Assert.Equal("S256", redirect["code_challenge_method"].ToString());
-        Assert.Equal("verified-mfa", redirect["acr_values"].ToString());
-        provider.Challenge = redirect["code_challenge"].ToString();
-        provider.Nonce = redirect["nonce"].ToString();
-        var callback = new Uri(redirect["redirect_uri"].ToString()).AbsolutePath;
-        var returned = await browser.PostAsync(callback, new FormUrlEncodedContent(new Dictionary<string, string>
-        { ["code"] = "synthetic-signed-identity", ["state"] = redirect["state"].ToString() }));
-        Assert.Equal(HttpStatusCode.Redirect, returned.StatusCode);
-        Assert.Equal("/unternehmen/lab/konto", returned.Headers.Location?.OriginalString);
-        Assert.Contains(returned.Headers.GetValues("Set-Cookie"), header =>
-            header.StartsWith("__Host-taskservice=", StringComparison.Ordinal) &&
-            header.Contains("secure", StringComparison.OrdinalIgnoreCase) && header.Contains("httponly", StringComparison.OrdinalIgnoreCase));
-        var session = await browser.GetFromJsonAsync<JsonElement>("/api/v1/session");
-        Assert.True(session.GetProperty("signedIn").GetBoolean());
+
+        async Task Login(string subject, string target, bool workforce)
+        {
+            provider.Subject = subject;
+            var query = "/api/v1/login?returnTo=" + Uri.EscapeDataString(target) + (workforce ? "&mode=workforce" : "");
+            var entry = await browser.GetAsync(query);
+            Assert.Equal(HttpStatusCode.Redirect, entry.StatusCode);
+            Assert.Equal(issuer + "/authorize", entry.Headers.Location!.GetLeftPart(UriPartial.Path));
+            var redirect = QueryHelpers.ParseQuery(entry.Headers.Location.Query);
+            Assert.Equal("code", redirect["response_type"].ToString());
+            Assert.Equal("S256", redirect["code_challenge_method"].ToString());
+            Assert.Equal(workforce ? "verified-mfa" : "", redirect.GetValueOrDefault("acr_values").ToString());
+            provider.Challenge = redirect["code_challenge"].ToString();
+            provider.Nonce = redirect["nonce"].ToString();
+            var callback = new Uri(redirect["redirect_uri"].ToString()).AbsolutePath;
+            Assert.Equal(workforce ? "/signin-oidc-workforce" : "/signin-oidc", callback);
+            var returned = await browser.PostAsync(callback, new FormUrlEncodedContent(new Dictionary<string, string>
+                { ["code"] = "synthetic-signed-identity", ["state"] = redirect["state"].ToString() }));
+            Assert.Equal(HttpStatusCode.Redirect, returned.StatusCode);
+            Assert.Equal(target, returned.Headers.Location?.OriginalString);
+            var cookie = workforce ? "__Host-taskservice-workforce=" : "__Host-taskservice=";
+            Assert.Contains(returned.Headers.GetValues("Set-Cookie"), header => header.StartsWith(cookie, StringComparison.Ordinal)
+                && header.Contains("secure", StringComparison.OrdinalIgnoreCase) && header.Contains("httponly", StringComparison.OrdinalIgnoreCase));
+        }
+
+        await Login("admin-a", "/unternehmen/lab/betrieb", workforce: true);
+        Assert.False((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session")).GetProperty("signedIn").GetBoolean());
+        Assert.True((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session?session=workforce")).GetProperty("signedIn").GetBoolean());
+        using var team = await browser.GetAsync(lab.Base() + "/team?session=workforce");
+        Assert.Equal(HttpStatusCode.OK, team.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await browser.GetAsync(lab.Base() + "/team")).StatusCode);
+
+        await Login("customer-a", "/unternehmen/lab/konto", workforce: false);
+        Assert.True((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session")).GetProperty("signedIn").GetBoolean());
         Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(lab.Request(lab.FixtureA))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await browser.GetAsync(lab.Base() + "/team")).StatusCode);
+
+        var staffSession = await browser.GetFromJsonAsync<JsonElement>("/api/v1/session?session=workforce");
+        using var logout = new HttpRequestMessage(HttpMethod.Post, "/api/v1/logout");
+        logout.Headers.Add("Origin", "https://localhost");
+        logout.Headers.Add(IdentitySessions.ScopeHeader, "workforce");
+        logout.Headers.Add("X-CSRF-Token", staffSession.GetProperty("csrfToken").GetString());
+        Assert.True((await browser.SendAsync(logout)).IsSuccessStatusCode);
+        Assert.False((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session?session=workforce")).GetProperty("signedIn").GetBoolean());
+        Assert.True((await browser.GetFromJsonAsync<JsonElement>("/api/v1/session")).GetProperty("signedIn").GetBoolean());
     }
 
     [Fact]
@@ -1047,13 +1073,14 @@ public sealed class Lab : IAsyncLifetime
             var sub = Request.Headers["X-Test-Subject"].ToString();
             if (sub.Length == 0)
                 return Task.FromResult(AuthenticateResult.NoResult());
-            var claims = new List<System.Security.Claims.Claim> { new("sub", sub), new("ts:issuer", Issuer) };
+            var claims = new List<System.Security.Claims.Claim>
+                { new("sub", sub), new("ts:issuer", Issuer), new("ts:realm", IdentitySessions.WorkforceClaim) };
             if (Request.Headers["X-Test-Email"].ToString() is { Length: > 0 } email)
                 claims.Add(new("email", email));
             if (Request.Headers["X-Test-Email-Verified"] == "1")
                 claims.Add(new("email_verified", "true"));
             if (Request.Headers["X-Test-Mfa"] == "1")
-                claims.Add(new("acr", "verified-mfa"));
+                claims.Add(new(IdentitySessions.AssuranceClaim, "verified-mfa"));
             if (sub == "platform-admin")
                 claims.Add(new("taskservice_role", "platform_admin"));
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
@@ -1077,6 +1104,7 @@ internal sealed class FakeOidcProvider(string issuer, string clientId) : HttpMes
     public SymmetricSecurityKey Key { get; } = new(RandomNumberGenerator.GetBytes(32));
     public string Challenge { get; set; } = "";
     public string Nonce { get; set; } = "";
+    public string Subject { get; set; } = "";
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -1088,7 +1116,7 @@ internal sealed class FakeOidcProvider(string issuer, string clientId) : HttpMes
         var now = DateTime.UtcNow;
         var token = new JwtSecurityToken(issuer, clientId,
         [
-            new System.Security.Claims.Claim("sub", "customer-a"),
+            new System.Security.Claims.Claim("sub", Subject),
             new System.Security.Claims.Claim("nonce", Nonce),
             new System.Security.Claims.Claim("iat", new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
             new System.Security.Claims.Claim("acr", "verified-mfa")

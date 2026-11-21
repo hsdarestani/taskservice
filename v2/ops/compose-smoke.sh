@@ -48,7 +48,14 @@ INSERT INTO ts.tenants(id,slug,name,accent,active)
 VALUES ('14ea086c-c616-4837-a754-aa1706bdf3df','release-fixture','Service QA','#1064e8',true);
 SQL
 "${compose[@]}" up -d api
-curl -fsS --retry 10 --retry-connrefused --retry-delay 1 http://localhost:18080/health/live >/dev/null
+live_url=http://localhost:18080/health/live
+for attempt in {1..30}; do
+  if curl -fs --max-time 2 "$live_url" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+curl -fsS --max-time 5 "$live_url" >/dev/null
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:18080/health/ready)" = 503
 test "$(curl -sS -o /dev/null -w '%{redirect_url}' http://localhost:18080/)" = http://localhost:18080/unternehmen/release-fixture
 curl -fsS http://localhost:18080/api/v1/tenants/release-fixture | grep -F 'Service QA' >/dev/null

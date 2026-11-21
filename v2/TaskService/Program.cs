@@ -167,7 +167,7 @@ app.MapOpenApi("/api/openapi/{documentName}.json");
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 var enforceRelease = app.Configuration.GetValue<bool>("Operations:RequireProductionReadiness");
 app.MapGet("/health/ready", async (ServiceDb db, IOptionsMonitor<OpenIdConnectOptions> oidc, CancellationToken ct) =>
-    (nativeIdentity || identityConfigured) && (enforceRelease ? await ReleaseGate.IsReady(db, app.Configuration, oidc, ct)
+    (nativeIdentity || identityConfigured) && (enforceRelease ? await ReleaseGate.IsReady(db, app.Configuration, oidc, app.Logger, ct)
         : await db.Database.CanConnectAsync(ct))
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(503));

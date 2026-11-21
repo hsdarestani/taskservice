@@ -127,6 +127,12 @@ ON CONFLICT DO NOTHING;
 SQL
 
 sed -i '/^\(Identity__Mode\|Identity__RecoveryMode\|Demo__Enabled\|Routing__DefaultTenantSlug\|PublicBaseUrl\|AllowedHosts\|Privacy__NoticeUrl\|Operations__TrustedProxies__0\|Mail__DeliveryMode\)=/d' secrets/api.env
+# Both projects have a Compose service called db. The API can also see
+# Publisher's default network. Address only TaskService's own PostgreSQL.
+for setting in Runtime Platform; do
+  grep -q "^ConnectionStrings__${setting}=Host=db;" "$backup/api.env"
+  sed -i "s/^ConnectionStrings__${setting}=Host=db;/ConnectionStrings__${setting}=Host=taskservice-db-1;/" secrets/api.env
+done
 cat >> secrets/api.env <<ENV
 Identity__Mode=native
 Identity__RecoveryMode=demo
@@ -163,7 +169,11 @@ for attempt in {1..30}; do
   if curl -fs -H 'Host: localhost' --max-time 5 "$ready_url" >/dev/null; then break; fi
   sleep 2
 done
-curl -fsS -H 'Host: localhost' --max-time 5 "$ready_url" >/dev/null
+if ! curl -fsS -H 'Host: localhost' --max-time 5 "$ready_url" >/dev/null; then
+  docker logs --tail 160 taskservice-api-1 2>&1 |
+    grep -E 'TaskService readiness blocked at [a-z-]+ \([A-Za-z]+\)' | tail -5 || true
+  exit 1
+fi
 demo_compose exec -T api curl -fsS -H 'Host: localhost' --max-time 5 http://127.0.0.1:8080/health/live </dev/null >/dev/null
 [[ "$(docker inspect -f '{{.State.Running}}|{{.State.OOMKilled}}' taskservice-worker-1)" == true\|false ]]
 [[ "$(host_memory)" -ge 450000 ]]

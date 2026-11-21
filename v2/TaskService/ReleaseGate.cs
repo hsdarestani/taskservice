@@ -9,6 +9,8 @@ namespace TaskService;
 
 public static class ReleaseGate
 {
+    private static DateTimeOffset lastFailure;
+
     public static string? PrivacyNotice(IConfiguration config) => HttpsUrl(config["Privacy:NoticeUrl"])?.AbsoluteUri;
 
     public static bool HasSettings(IConfiguration config) =>
@@ -29,10 +31,11 @@ public static class ReleaseGate
         uri.UserInfo.Length == 0 ? uri : null;
 
     public static async Task<bool> IsReady(ServiceDb db, IConfiguration config,
-        IOptionsMonitor<OpenIdConnectOptions> oidc, CancellationToken ct)
+        IOptionsMonitor<OpenIdConnectOptions> oidc, ILogger logger, CancellationToken ct)
     {
         if (!HasSettings(config))
-            return false;
+            return Unavailable(logger, "configuration", "Missing");
+        var phase = "tenant";
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(4));
@@ -41,12 +44,13 @@ public static class ReleaseGate
             var token = deadline.Token;
             var slug = config["Routing:DefaultTenantSlug"];
             if (!await db.Tenants.AnyAsync(t => t.Active && t.Slug == slug, token))
-                return false;
+                return Unavailable(logger, phase, "Missing");
 
+            phase = "identity";
             if (NativeIdentity.Enabled(config))
             {
                 if (!await db.NativeAccounts.AnyAsync(a => a.Workforce && a.PlatformAdmin && a.TotpCipher != null, token))
-                    return false;
+                    return Unavailable(logger, phase, "Missing");
             }
             else
             {
@@ -57,6 +61,7 @@ public static class ReleaseGate
                     return false;
             }
 
+            phase = "scanner";
             using var scanner = new TcpClient();
             await scanner.ConnectAsync(config["ClamAv:Host"]!, config.GetValue("ClamAv:Port", 3310), token);
             await using var stream = scanner.GetStream();
@@ -64,13 +69,30 @@ public static class ReleaseGate
             var reply = new byte[5];
             await stream.ReadExactlyAsync(reply, token);
             if (!reply.AsSpan().SequenceEqual("PONG\0"u8))
-                return false;
+                return Unavailable(logger, phase, "InvalidReply");
+            phase = "scanner-signatures";
             await ClamAvScanner.RequireCurrentSignatures(config, token);
             return true;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is not OutOfMemoryException)
         {
-            return false;
+            return Unavailable(logger, phase, ex.GetType().Name);
         }
+    }
+
+    private static readonly object FailureLogLock = new();
+
+    private static bool Unavailable(ILogger logger, string phase, string kind)
+    {
+        lock (FailureLogLock)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - lastFailure >= TimeSpan.FromSeconds(30))
+            {
+                lastFailure = now;
+                logger.LogWarning("TaskService readiness blocked at {Phase} ({ReasonType})", phase, kind);
+            }
+        }
+        return false;
     }
 }

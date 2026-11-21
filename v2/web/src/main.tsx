@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, Plug, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
@@ -106,6 +106,7 @@ const workspaceMenus = {
     { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
   company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
     { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Team und Rechte', id: 'team', icon: ShieldCheck },
+    { name: 'Integrationen', id: 'integrations', icon: Plug },
     { name: 'Unternehmenschat', id: 'conversations', icon: MessagesSquare }],
   technician: [{ name: 'Einsätze', id: 'requests', icon: ClipboardList }, { name: 'Tagesplan', id: 'schedule', icon: CalendarDays },
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
@@ -115,7 +116,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
   portal: Exclude<Portal, 'customer'>; company?: Company; signedIn: boolean; logout: () => Promise<void>; children: ReactNode;
 }) {
   const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
-  const menu = workspaceMenus[portal].filter(item => item.id !== 'team' || company?.role === 'admin');
+  const menu = workspaceMenus[portal].filter(item => !['team', 'integrations'].includes(item.id) || company?.role === 'admin');
   const defaultSection = menu[0].id;
   const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
   useEffect(() => {
@@ -354,9 +355,26 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       {technicians.data?.length === 0 && <p className="muted">Aktuell sind keine Techniker zuweisbar.</p>}
       {technicians.data && <ul className="staff-directory">{technicians.data.map(tech => <li key={tech.id}><UserRound aria-hidden/>{tech.name}</li>)}</ul>}
     </section>}
-    {isCompany && company.role === 'admin' && <Team api={api} session={session}/>}
+    {isCompany && company.role === 'admin' && <><Team api={api} session={session}/><IntegrationInbox/></>}
     <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>
   </>;
+}
+
+function IntegrationInbox() {
+  const [refresh, setRefresh] = useState(0);
+  const inbox = useLoad<{ eventId: string; eventType: string; revision: number; receivedAt: string }[]>(
+    api + '/integrations/inbox', refresh);
+  return <section className="panel" id="integrations">
+    <div className="section-line"><h2>Eingegangene Integrationsereignisse</h2>
+      <button className="text-button" onClick={() => setRefresh(x => x + 1)}>Aktualisieren</button></div>
+    <Notice text={inbox.error}/>
+    {!inbox.data && !inbox.error && <p role="status">Ereignisse werden geladen …</p>}
+    {inbox.data?.length === 0 && <p className="muted">Es sind noch keine signierten Ereignisse eingegangen.</p>}
+    {inbox.data && inbox.data.length > 0 && <ul className="rows">
+      {inbox.data.map(event => <li key={event.eventId}><span><strong>{event.eventType}</strong>
+        <small>Revision {event.revision}</small></span><small>{date(event.receivedAt)}</small></li>)}
+    </ul>}
+  </section>;
 }
 
 function ClaimRequest({ session, id }: { session: Session; id: string }) {

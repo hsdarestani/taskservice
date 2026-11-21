@@ -66,6 +66,14 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(10),
             QueueLimit = 0
         }));
+    options.AddPolicy("incoming-webhook", http => RateLimitPartition.GetFixedWindowLimiter(
+        http.Connection.RemoteIpAddress?.ToString() ?? "local",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 90,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
     options.AddPolicy("guest", http => RateLimitPartition.GetFixedWindowLimiter(
         http.Connection.RemoteIpAddress?.ToString() ?? "local",
         _ => new FixedWindowRateLimiterOptions

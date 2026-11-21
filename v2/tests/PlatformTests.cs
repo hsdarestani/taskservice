@@ -343,6 +343,70 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public async Task SignedIntegrationInboxVerifiesRawBytesRotationTenantAndRevision()
+    {
+        var connection = Guid.NewGuid();
+        var firstKey = RandomNumberGenerator.GetBytes(32);
+        var rotatedKey = RandomNumberGenerator.GetBytes(32);
+        var prefix = $"Integration:Connections:{connection:D}:";
+        await using var host = lab.IsolatedHost().WithWebHostBuilder(web => web.ConfigureAppConfiguration((_, config) =>
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [prefix + "Enabled"] = "true", [prefix + "TenantSlug"] = "lab",
+                [prefix + "Keys:primary"] = "whsec_" + Convert.ToBase64String(firstKey),
+                [prefix + "Keys:rotating"] = "whsec_" + Convert.ToBase64String(rotatedKey)
+            })));
+        using var machine = host.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using var staff = lab.Client("admin-a", mfa: true);
+        using var customer = lab.Client("customer-a");
+        var resourceId = Guid.NewGuid();
+        var id = Guid.NewGuid();
+        var timestamp = DateTimeOffset.UtcNow;
+        byte[] Body(Guid eventId, int revision, string tenant = "lab") => JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            id = eventId, type = "fixture.status.changed", schemaVersion = 1, occurredAt = timestamp,
+            tenant, resourceId, revision, data = new { deliberatelyPrivate = "synthetic payload" }
+        });
+        async Task<HttpResponseMessage> Send(Guid eventId, byte[] body, byte[] signingKey, long seconds)
+        {
+            var signed = System.Text.Encoding.ASCII.GetBytes($"{eventId:D}.{seconds}.").Concat(body).ToArray();
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/inbound/{connection:D}");
+            request.Headers.Add("webhook-id", eventId.ToString("D"));
+            request.Headers.Add("webhook-timestamp", seconds.ToString());
+            request.Headers.Add("webhook-signature", "v1," + Convert.ToBase64String(HMACSHA256.HashData(signingKey, signed)));
+            request.Content = new ByteArrayContent(body);
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return await machine.SendAsync(request);
+        }
+
+        var seconds = timestamp.ToUnixTimeSeconds();
+        var raw = Body(id, 2);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(id, raw, RandomNumberGenerator.GetBytes(32), seconds)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(id, raw, firstKey, seconds - 360)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await Send(id, Body(id, 2, "other"), firstKey, seconds)).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await Send(id, raw, firstKey, seconds)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Send(id, raw, rotatedKey, seconds)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(id, Body(id, 3), firstKey, seconds)).StatusCode);
+        var oldId = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(oldId, Body(oldId, 1), rotatedKey, seconds)).StatusCode);
+        var newerId = Guid.NewGuid();
+        Assert.Equal(HttpStatusCode.Accepted, (await Send(newerId, Body(newerId, 3), rotatedKey, seconds)).StatusCode);
+
+        var inbox = lab.Base() + "/integrations/inbox";
+        var response = await staff.GetAsync(inbox);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("deliberatelyPrivate", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, (await customer.GetAsync(inbox)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.GetAsync(Lab.TenantUrl("other") + "/integrations/inbox")).StatusCode);
+        await using var db = new NpgsqlConnection(lab.Runtime);
+        await db.OpenAsync();
+        Assert.Equal(0L, await Lab.Read<long>(db, "select count(*) from ts.integration_inbox"));
+        await using var transaction = await db.BeginTransactionAsync();
+        await Lab.Scope(db, lab.TenantA);
+        Assert.Equal(2L, await Lab.Read<long>(db, $"select count(*) from ts.integration_inbox where connection_id='{connection}'"));
+    }
+
+    [Fact]
     public async Task SimultaneousBookingsAreRejectedAndWorkRequiresReportBeforeCompletion()
     {
         using var admin = lab.Client("admin-a", mfa: true);

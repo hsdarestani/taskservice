@@ -55,6 +55,14 @@ Dispatch can use explicit offset timestamps or local Berlin times. Ambiguous clo
 
 The installed web app can open a company-specific portal using its manifest. The service worker caches the generic offline page and fingerprinted frontend assets. Authenticated pages, API responses, chat and private files use network access. The browser acceptance suite checks offline navigation and inspects cached paths.
 
+## Integration inbox
+
+The generic inbound endpoint is `POST /api/v1/inbound/{connectionId}`. A deployment enables each connection in the `Integration:Connections:{connection-id}` configuration section with an explicit `TenantSlug`, `Enabled` flag and up to four rotation keys in `Keys`. Use the approved secret store for `whsec_` keys. The connection configuration determines the tenant. A tenant supplied in the event body is checked against that definition.
+
+Send the Standard Webhooks headers `webhook-id`, `webhook-timestamp` and `webhook-signature`. The event ID is a UUID and the timestamp is a Unix second within the allowed five-minute skew. Calculate HMAC-SHA256 over the ID, timestamp and original body bytes with periods as separators. The signature header accepts the `v1,` prefix with a Base64 signature and permits multiple signatures for rotation. The JSON envelope has `id`, `type`, `schemaVersion` (currently 1), `occurredAt`, `tenant`, `resourceId`, `revision` and an object-valued `data`. Limit the envelope to data needed by the integration.
+
+The inbox persists the envelope and audit record transactionally. Repeated events with identical bytes return the existing acknowledgement. Conflicting event IDs or non-increasing resource revisions are rejected. The company administrator sees event metadata in the operations workspace. Business mapping, outbound delivery, replay controls, retention and the ZIEMER connector remain open.
+
 ## Production boundary
 
 V2 is under development. The [read-only audit script](ops/publisher-capacity.sh) is for a verified Publisher SSH session. Production deployment must be gated on current capacity, known-host verification, restore evidence, the full acceptance suite, environment-specific IdP/mail/storage configuration and approved data migration. There is no V2 cutover workflow in this increment.

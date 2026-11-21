@@ -18,5 +18,6 @@
     <EmbeddedResource Include="Database/005_platform_administration.sql" LogicalName="TaskService.PlatformAdministration" />
     <EmbeddedResource Include="Database/006_request_intake.sql" LogicalName="TaskService.RequestIntake" />
     <EmbeddedResource Include="Database/007_team_access.sql" LogicalName="TaskService.TeamAccess" />
+    <EmbeddedResource Include="Database/008_integration_inbox.sql" LogicalName="TaskService.IntegrationInbox" />
   </ItemGroup>
 </Project>

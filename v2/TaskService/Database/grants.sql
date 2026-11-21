@@ -35,3 +35,4 @@ GRANT UPDATE (used_at, revoked_at) ON ts.member_invites TO taskservice_api;
 GRANT INSERT ON ts.members TO taskservice_api;
 GRANT UPDATE (active, revision) ON ts.members TO taskservice_api;
 GRANT INSERT, DELETE ON ts.report_permissions, ts.invoice_permissions TO taskservice_api;
+GRANT SELECT, INSERT ON ts.integration_inbox TO taskservice_api;

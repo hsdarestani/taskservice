@@ -31,7 +31,7 @@ The test tenant UI lives at `/unternehmen/{slug}`, `/unternehmen/{slug}/betrieb`
 
 The platform portal provisions a company under a new slug. The operator can edit its name and brand color, suspend and reactivate access, or deactivate the company. Lifecycle changes and their reasons are recorded in the platform audit. This area requires the explicit platform claim and configured MFA assurance. Set `ConnectionStrings__Platform` to the restricted platform database role. That role has no read access to tenant tickets, messages or files. The tenant application role cannot modify the catalog or read the platform audit.
 
-Initial company membership, custom domains and support-access delegation remain open. Installable portal branding currently uses the company name and color with the shared TaskService icon.
+Platform operators can queue a first-admin invitation using a database routine limited to onboarding status and invitation issuance. Initial admins must confirm the invited identity and configured MFA. Company administrators can invite dispatchers and technicians, grant report or invoice permissions allowed by role, and suspend staff in their own tenant. Real mail transport, custom domains and support-access delegation remain production gates. Installable portal branding currently uses the company name and color with the shared TaskService icon.
 
 ## Working reports
 

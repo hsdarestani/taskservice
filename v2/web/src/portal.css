@@ -214,3 +214,16 @@ body:has(.request-dialog[open]) { overflow: hidden; }
   .request-table .badge { font-size: .74rem; }
 }
 @media(prefers-reduced-motion: reduce) { .service-tile img, .feature-card { transition: none; } }
+
+.team-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,.92fr); gap: 23px; }
+.team-grid h3 { display: flex; align-items: center; gap: 7px; margin: 16px 0 6px; }
+.team-grid h3 svg { color: var(--blue); }
+.team-grid .rows li { overflow-wrap: anywhere; }
+.team-grid .rows li > span { min-width: 0; }
+.role-permissions { margin: 8px 0 12px; border: 1px solid var(--line); border-radius: 8px; }
+.role-permissions legend { padding: 0 4px; font-weight: 680; }
+.choice-line { display: flex; gap: 9px; align-items: center; margin: 2px 0; min-height: 38px; }
+.choice-line input { width: 16px; min-height: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
+@media (max-width: 940px) { .team-grid { grid-template-columns: 1fr; gap: 10px; } }
+
+.initial-admin { margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--line); }

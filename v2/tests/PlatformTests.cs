@@ -10,6 +10,13 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -161,6 +168,152 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         var uncheckedSend = await guest.PostAsJsonAsync(lab.Base() + "/requests",
             new { title = "Ungültig", description = "Ohne Token", email = "qa@example.invalid" });
         Assert.Equal(HttpStatusCode.Forbidden, uncheckedSend.StatusCode);
+    }
+
+    [Fact]
+    public async Task InvitedEmployeeBindsVerifiedAddressAndCanOnlyReceiveRoleScopedPermissions()
+    {
+        await using var host = lab.IsolatedHost();
+        HttpClient Local(string subject, string? email = null, bool verified = false, bool mfa = false)
+        {
+            var client = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+            client.DefaultRequestHeaders.Add("X-Test-Subject", subject);
+            if (email is not null)
+                client.DefaultRequestHeaders.Add("X-Test-Email", email);
+            if (verified)
+                client.DefaultRequestHeaders.Add("X-Test-Email-Verified", "1");
+            if (mfa)
+                client.DefaultRequestHeaders.Add("X-Test-Mfa", "1");
+            return client;
+        }
+
+        using var admin = Local("admin-a", mfa: true);
+        using var unauthorised = Local("tech-a", mfa: true);
+        using var invited = Local("invited-technician", "invited@example.invalid", verified: true);
+        using var unverified = Local("unverified", "invited@example.invalid");
+        using var wrong = Local("wrong-person", "another@example.invalid", verified: true);
+        var root = lab.Base() + "/team";
+        var draft = new { name = "Prüfpersonal", email = "invited@example.invalid", role = "technician" };
+        Assert.Equal(HttpStatusCode.Forbidden, (await unauthorised.GetAsync(root)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(unauthorised, root + "/invitations", draft)).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        var issued = await lab.Post(admin, root + "/invitations", draft, key);
+        Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
+        Assert.Equal(await issued.Content.ReadAsStringAsync(),
+            await (await lab.Post(admin, root + "/invitations", draft, key)).Content.ReadAsStringAsync());
+        var id = (await issued.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var token = await lab.TokenFor(id, host.Services);
+        var acceptance = root + "/invitations/" + id + "/accept";
+        Assert.Equal(HttpStatusCode.NotFound, (await lab.Post(unverified, acceptance, new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await lab.Post(wrong, acceptance, new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(invited, acceptance, new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await lab.Post(invited, acceptance, new { token })).StatusCode);
+        var directory = await admin.GetFromJsonAsync<JsonElement>(root);
+        var member = directory.GetProperty("members").EnumerateArray().Single(m => m.GetProperty("name").GetString() == draft.name);
+        var memberId = member.GetProperty("id").GetGuid();
+        var commands = root + "/members/" + memberId + "/commands";
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await lab.Post(admin, commands,
+            new { active = true, permissions = new[] { "invoice.approve" } }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(admin, commands,
+            new { active = true, permissions = new[] { "invoice.upload" } }, revision: 1)).StatusCode);
+        var item = await lab.Insert("assigned", memberId);
+        Assert.Equal(HttpStatusCode.OK, (await invited.GetAsync(lab.Request(item))).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await lab.Upload(invited, lab.Request(item) + "/invoices",
+            """<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"></Invoice>"""u8.ToArray())).StatusCode);
+        Assert.True(await lab.ProcessInvoice(Lab.LocalClamAv() ?? new FixtureInvoiceScanner(clean: true)));
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(admin, commands,
+            new { active = false, permissions = Array.Empty<string>() }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(admin, commands,
+            new { active = false, permissions = Array.Empty<string>() }, revision: 2)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await invited.GetAsync(lab.Request(item))).StatusCode);
+    }
+
+    [Fact]
+    public async Task PlatformIssuesOnlyTheFirstAdministratorInviteAndCannotReadInvitationRecords()
+    {
+        await using var host = lab.IsolatedHost();
+        using var platform = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        platform.DefaultRequestHeaders.Add("X-Test-Subject", "platform-admin");
+        platform.DefaultRequestHeaders.Add("X-Test-Mfa", "1");
+        using var worker = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        worker.DefaultRequestHeaders.Add("X-Test-Subject", "company-initial-admin");
+        worker.DefaultRequestHeaders.Add("X-Test-Email", "initial@example.invalid");
+        worker.DefaultRequestHeaders.Add("X-Test-Email-Verified", "1");
+        const string slug = "bootstrap-check";
+        var setup = "/api/v1/platform/companies/" + slug + "/setup";
+        Assert.Equal(HttpStatusCode.Created, (await lab.Post(platform, "/api/v1/platform/companies",
+            new { slug, name = "Prüfunternehmen", accent = "#1064e8" }, revision: 0)).StatusCode);
+        var status = await platform.GetFromJsonAsync<JsonElement>(setup);
+        Assert.Equal("missing", status.GetProperty("state").GetString());
+        var form = new { name = "Erstadmin Test", email = "initial@example.invalid" };
+        var issued = await lab.Post(platform, setup, form);
+        Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(platform, setup, form)).StatusCode);
+        Assert.Equal("pending", (await platform.GetFromJsonAsync<JsonElement>(setup)).GetProperty("state").GetString());
+        var id = (await issued.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var token = await lab.TokenFor(id, host.Services);
+        var accept = Lab.TenantUrl(slug) + "/team/invitations/" + id + "/accept";
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(worker, accept, new { token })).StatusCode);
+        worker.DefaultRequestHeaders.Add("X-Test-Mfa", "1");
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(worker, accept, new { token })).StatusCode);
+        Assert.Equal("active", (await platform.GetFromJsonAsync<JsonElement>(setup)).GetProperty("state").GetString());
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(platform, setup, form)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await worker.GetAsync(Lab.TenantUrl(slug) + "/team")).StatusCode);
+        await using var platformDb = new NpgsqlConnection(lab.PlatformConnection);
+        await platformDb.OpenAsync();
+        var denied = await Assert.ThrowsAsync<PostgresException>(() => Lab.Read<long>(platformDb, "select count(*) from ts.member_invites"));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+    }
+
+    [Fact]
+    public async Task OidcChallengeUsesPkceRequestsWorkforceAssuranceAndEstablishesAccountCookie()
+    {
+        const string issuer = "https://identity.example.invalid";
+        const string clientId = "taskservice-test-client";
+        using var provider = new FakeOidcProvider(issuer, clientId);
+        using var environment = new TestEnvironment(new()
+        {
+            ["Identity__Authority"] = issuer, ["Identity__ClientId"] = clientId,
+            ["Identity__ClientSecret"] = "fixture-only", ["Identity__PrivilegedAcr"] = "verified-mfa"
+        });
+        await using var host = lab.IsolatedHost().WithWebHostBuilder(web =>
+        {
+            web.ConfigureServices(services =>
+            {
+                services.PostConfigure<AuthenticationOptions>(o => o.DefaultAuthenticateScheme = CookieAuthenticationDefaults.AuthenticationScheme);
+                services.PostConfigure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+                {
+                    options.Backchannel = new HttpClient(provider, disposeHandler: false);
+                    var metadata = new OpenIdConnectConfiguration
+                    {
+                        Issuer = issuer, AuthorizationEndpoint = issuer + "/authorize", TokenEndpoint = issuer + "/token"
+                    };
+                    metadata.SigningKeys.Add(provider.Key);
+                    options.ConfigurationManager = new StaticConfigurationManager<OpenIdConnectConfiguration>(metadata);
+                });
+            });
+        });
+        using var browser = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        var entry = await browser.GetAsync("/api/v1/login?returnTo=%2Funternehmen%2Flab%2Fkonto&mode=workforce");
+        Assert.Equal(HttpStatusCode.Redirect, entry.StatusCode);
+        Assert.Equal(issuer + "/authorize", entry.Headers.Location!.GetLeftPart(UriPartial.Path));
+        var redirect = QueryHelpers.ParseQuery(entry.Headers.Location.Query);
+        Assert.Equal("code", redirect["response_type"].ToString());
+        Assert.Equal("S256", redirect["code_challenge_method"].ToString());
+        Assert.Equal("verified-mfa", redirect["acr_values"].ToString());
+        provider.Challenge = redirect["code_challenge"].ToString();
+        provider.Nonce = redirect["nonce"].ToString();
+        var callback = new Uri(redirect["redirect_uri"].ToString()).AbsolutePath;
+        var returned = await browser.PostAsync(callback, new FormUrlEncodedContent(new Dictionary<string, string>
+        { ["code"] = "synthetic-signed-identity", ["state"] = redirect["state"].ToString() }));
+        Assert.Equal(HttpStatusCode.Redirect, returned.StatusCode);
+        Assert.Equal("/unternehmen/lab/konto", returned.Headers.Location?.OriginalString);
+        Assert.Contains(returned.Headers.GetValues("Set-Cookie"), header =>
+            header.StartsWith("__Host-taskservice=", StringComparison.Ordinal) &&
+            header.Contains("secure", StringComparison.OrdinalIgnoreCase) && header.Contains("httponly", StringComparison.OrdinalIgnoreCase));
+        var session = await browser.GetFromJsonAsync<JsonElement>("/api/v1/session");
+        Assert.True(session.GetProperty("signedIn").GetBoolean());
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(lab.Request(lab.FixtureA))).StatusCode);
     }
 
     [Fact]
@@ -363,6 +516,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var result = await response.Content.ReadFromJsonAsync<JsonElement>();
         var id = result.GetProperty("id").GetGuid();
+        var visibleBefore = await lab.VisibleInvoiceFiles(lab.TenantA);
         var item = url + "/" + id;
         var pdf = item + "/versions/1/download";
         Assert.Equal(response.Headers.Location, (await lab.Upload(uploader, url, original, key: key)).Headers.Location);
@@ -371,11 +525,11 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         Assert.Equal(HttpStatusCode.NotFound, (await reviewer.GetAsync(pdf)).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(reviewer, item + "/commands",
             new { action = "approve", version = 1 }, revision: 1)).StatusCode);
-        Assert.Equal(0L, await lab.VisibleInvoiceFiles(lab.TenantA));
+        Assert.Equal(visibleBefore, await lab.VisibleInvoiceFiles(lab.TenantA));
 
         var cleanScanner = Lab.LocalClamAv() ?? new FixtureInvoiceScanner(clean: true);
         Assert.True(await lab.ProcessInvoice(cleanScanner));
-        Assert.True(await lab.VisibleInvoiceFiles(lab.TenantA) > 0);
+        Assert.Equal(visibleBefore + 1, await lab.VisibleInvoiceFiles(lab.TenantA));
         Assert.Equal(0L, await lab.VisibleInvoiceFiles(lab.TenantB));
         Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(uploader, item + "/commands",
             new { action = "approve", version = 1 }, revision: 1)).StatusCode);
@@ -894,6 +1048,10 @@ public sealed class Lab : IAsyncLifetime
             if (sub.Length == 0)
                 return Task.FromResult(AuthenticateResult.NoResult());
             var claims = new List<System.Security.Claims.Claim> { new("sub", sub), new("ts:issuer", Issuer) };
+            if (Request.Headers["X-Test-Email"].ToString() is { Length: > 0 } email)
+                claims.Add(new("email", email));
+            if (Request.Headers["X-Test-Email-Verified"] == "1")
+                claims.Add(new("email_verified", "true"));
             if (Request.Headers["X-Test-Mfa"] == "1")
                 claims.Add(new("acr", "verified-mfa"));
             if (sub == "platform-admin")
@@ -912,4 +1070,55 @@ public sealed class FixtureInvoiceScanner(bool clean) : InvoiceScanner
 public sealed class UnavailableInvoiceScanner : InvoiceScanner
 {
     public Task<bool> IsClean(byte[] content, CancellationToken ct) => throw new IOException("Synthetic scanner outage.");
+}
+
+internal sealed class FakeOidcProvider(string issuer, string clientId) : HttpMessageHandler
+{
+    public SymmetricSecurityKey Key { get; } = new(RandomNumberGenerator.GetBytes(32));
+    public string Challenge { get; set; } = "";
+    public string Nonce { get; set; } = "";
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Assert.Equal(issuer + "/token", request.RequestUri?.AbsoluteUri);
+        var body = QueryHelpers.ParseQuery("?" + await request.Content!.ReadAsStringAsync(cancellationToken));
+        Assert.Equal("authorization_code", body["grant_type"].ToString());
+        Assert.Equal("synthetic-signed-identity", body["code"].ToString());
+        Assert.Equal(Challenge, Base64UrlEncoder.Encode(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(body["code_verifier"].ToString()))));
+        var now = DateTime.UtcNow;
+        var token = new JwtSecurityToken(issuer, clientId,
+        [
+            new System.Security.Claims.Claim("sub", "customer-a"),
+            new System.Security.Claims.Claim("nonce", Nonce),
+            new System.Security.Claims.Claim("iat", new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+            new System.Security.Claims.Claim("acr", "verified-mfa")
+        ], now.AddSeconds(-5), now.AddMinutes(10), new SigningCredentials(Key, SecurityAlgorithms.HmacSha256));
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                token_type = "Bearer", access_token = "fixture-access", expires_in = 600,
+                id_token = new JwtSecurityTokenHandler().WriteToken(token)
+            })
+        };
+    }
+}
+
+
+internal sealed class TestEnvironment : IDisposable
+{
+    private readonly Dictionary<string, string?> previous;
+
+    public TestEnvironment(Dictionary<string, string> variables)
+    {
+        previous = variables.Keys.ToDictionary(key => key, Environment.GetEnvironmentVariable);
+        foreach (var (key, value) in variables)
+            Environment.SetEnvironmentVariable(key, value);
+    }
+
+    public void Dispose()
+    {
+        foreach (var (key, value) in previous)
+            Environment.SetEnvironmentVariable(key, value);
+    }
 }

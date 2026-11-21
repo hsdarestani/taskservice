@@ -30,3 +30,8 @@ GRANT SELECT, INSERT ON ts.platform_audit, ts.platform_commands TO taskservice_p
 GRANT SELECT, INSERT ON ts.request_photos, ts.request_photo_files TO taskservice_api;
 GRANT SELECT ON ts.request_photos, ts.request_photo_files TO taskservice_worker;
 GRANT UPDATE (scan_status) ON ts.request_photos TO taskservice_worker;
+GRANT SELECT, INSERT ON ts.member_invites TO taskservice_api;
+GRANT UPDATE (used_at, revoked_at) ON ts.member_invites TO taskservice_api;
+GRANT INSERT ON ts.members TO taskservice_api;
+GRANT UPDATE (active, revision) ON ts.members TO taskservice_api;
+GRANT INSERT, DELETE ON ts.report_permissions, ts.invoice_permissions TO taskservice_api;

@@ -65,10 +65,11 @@ public static class Workflow
     public static void QueueMail(ServiceDb db, Guid tenant, IDataProtectionProvider provider, string to,
         string subject, string content)
     {
-        var payload = JsonSerializer.Serialize(new MailPayload(to, subject, content));
-        var secured = provider.CreateProtector("taskservice-outbox-mail-v1").Protect(payload);
-        db.Outbox.Add(new(tenant, Guid.NewGuid(), "mail", secured, DateTimeOffset.UtcNow));
+        db.Outbox.Add(new(tenant, Guid.NewGuid(), "mail", ProtectMail(provider, to, subject, content), DateTimeOffset.UtcNow));
     }
+
+    internal static string ProtectMail(IDataProtectionProvider provider, string to, string subject, string content) =>
+        provider.CreateProtector("taskservice-outbox-mail-v1").Protect(JsonSerializer.Serialize(new MailPayload(to, subject, content)));
 }
 
 public sealed record MailPayload(string To, string Subject, string Content);

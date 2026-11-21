@@ -52,6 +52,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         ConfigureInvoices(model);
         ConfigurePlatform(model);
         ConfigureIntake(model);
+        ConfigureTeam(model);
         foreach (var entity in model.Model.GetEntityTypes())
         foreach (var property in entity.GetProperties())
             property.SetColumnName(NameBoundary().Replace(property.Name, "_$1").ToLowerInvariant());
@@ -69,7 +70,11 @@ public sealed record Tenant(Guid Id, string Slug, string Name, string Accent, bo
     public string Accent { get; set; } = Accent;
     public bool Active { get; set; } = Active;
 }
-public sealed record Member(Guid TenantId, Guid Id, string SubjectKey, string Name, string Role, bool Active);
+public sealed record Member(Guid TenantId, Guid Id, string SubjectKey, string Name, string Role, bool Active)
+{
+    public bool Active { get; set; } = Active;
+    public int Revision { get; set; } = 1;
+}
 public sealed class ServiceRequest
 {
     public required Guid TenantId { get; init; }

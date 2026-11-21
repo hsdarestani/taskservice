@@ -14,6 +14,8 @@ public static partial class Endpoints
         var group = app.MapGroup("/api/v1/platform").AddEndpointFilter<CsrfFilter>();
         group.MapGet("/overview", Platform);
         group.MapGet("/audit", PlatformAuditLog);
+        group.MapGet("/companies/{slug}/setup", AdminSetupStatus);
+        group.MapPost("/companies/{slug}/setup", InviteInitialAdmin).WithMetadata(new RequestSizeLimitAttribute(4096)).RequireRateLimiting("invitations");
         group.MapPost("/companies", CreateCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
         group.MapPost("/companies/{slug}/commands", ModifyCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
     }

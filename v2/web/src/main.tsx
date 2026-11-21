@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
-import { get, send, uploadInvoice } from './api';
+import { send, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
 import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
+import { useLoad } from './useLoad';
+import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
 import './portal.css';
 
@@ -32,20 +34,6 @@ const base = slug ? '/unternehmen/' + encodeURIComponent(slug) : '';
 const api = slug ? '/api/v1/tenants/' + encodeURIComponent(slug) : '';
 const login = '/api/v1/login?returnTo=' + encodeURIComponent(location.pathname);
 const requestId = path[2] === 'anfragen' ? path[3] : undefined;
-
-function useLoad<T>(url: string | undefined, revision = 0) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState('');
-  useEffect(() => {
-    let active = true;
-    setData(undefined);
-    setError('');
-    if (url) get<T>(url).then(x => { if (active) setData(x); })
-      .catch(x => { if (active) setError(x.message); });
-    return () => { active = false; };
-  }, [url, revision]);
-  return { data, error };
-}
 
 function Notice({ text }: { text: string }) {
   return text ? <p className="notice" role="alert">{text}</p> : null;
@@ -89,7 +77,9 @@ function App() {
     <CustomerHome base={base} api={api} company={company.data} session={session.data}
       categories={catalog.data} catalogError={catalog.error}/>
   </>;
-  const body = requestId && path[4] === 'bestaetigen'
+  const body = path[2] === 'einladungen' && path[3]
+    ? <AcceptInvitation endpoint={api} base={base} login={loginLink + '&mode=workforce'} session={session.data} id={path[3]}/>
+    : requestId && path[4] === 'bestaetigen'
     ? <ClaimRequest session={session.data} id={requestId}/>
     : requestId ? <RequestDetail session={session.data} id={requestId} portal={portal}/>
     : portal === 'platform' ? <Platform session={session.data}/>
@@ -113,7 +103,8 @@ const workspaceMenus = {
   platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
     { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
   company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
-    { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Unternehmenschat', id: 'conversations', icon: MessagesSquare }],
+    { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Team und Rechte', id: 'team', icon: ShieldCheck },
+    { name: 'Unternehmenschat', id: 'conversations', icon: MessagesSquare }],
   technician: [{ name: 'Einsätze', id: 'requests', icon: ClipboardList }, { name: 'Tagesplan', id: 'schedule', icon: CalendarDays },
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
 };
@@ -122,13 +113,14 @@ function Workspace({ portal, company, signedIn, logout, children }: {
   portal: Exclude<Portal, 'customer'>; company?: Company; signedIn: boolean; logout: () => Promise<void>; children: ReactNode;
 }) {
   const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
-  const menu = workspaceMenus[portal];
-  const [hash, setHash] = useState(location.hash.slice(1) || menu[0].id);
+  const menu = workspaceMenus[portal].filter(item => item.id !== 'team' || company?.role === 'admin');
+  const defaultSection = menu[0].id;
+  const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
   useEffect(() => {
-    const listener = () => setHash(location.hash.slice(1) || menu[0].id);
+    const listener = () => setHash(location.hash.slice(1) || defaultSection);
     addEventListener('hashchange', listener);
     return () => removeEventListener('hashchange', listener);
-  }, [menu]);
+  }, [defaultSection]);
   return <div className={'workspace workspace-' + portal}>
     <aside className="workspace-sidebar">
       <Wordmark href={root}/><p className="workspace-label">{workspaceLabels[portal]}</p>
@@ -142,7 +134,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
       <header className="workspace-top">
         <div>{portal === 'technician' && <Wordmark href={root}/>}<strong>{company?.name || 'TaskService'}</strong>
           <small>{workspaceLabels[portal]}</small></div>
-        {signedIn ? <button className="text-button" onClick={logout}>Abmelden</button> : <a href={login}>Anmelden</a>}
+        {signedIn ? <button className="text-button" onClick={logout}>Abmelden</button> : <a href={login + '&mode=workforce'}>Anmelden</a>}
       </header>
       <main id="inhalt" className="workspace-main">{children}</main>
     </div>
@@ -157,7 +149,7 @@ const platformApi = '/api/v1/platform';
 const companyState = { active: 'Aktiv', suspended: 'Gesperrt', deactivated: 'Deaktiviert' };
 const platformAction: Record<string, string> = {
   provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
-  activate: 'Portal aktivieren', deactivate: 'Unternehmen deaktivieren',
+  activate: 'Portal aktivieren', deactivate: 'Unternehmen deaktivieren', initial_admin_invited: 'Erste Administration eingeladen',
 };
 
 function Platform({ session }: { session: Session }) {
@@ -173,7 +165,7 @@ function Platform({ session }: { session: Session }) {
     <div id="overview" className="workspace-heading"><p className="eyebrow">TaskService</p><h1>Plattformverwaltung</h1>
       <p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
     {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Konto mit Mehrfaktor-Anmeldung.</p>
-      <a className="primary" href={login}>Zur Anmeldung</a></Panel>}
+      <a className="primary" href={login + '&mode=workforce'}>Zur Anmeldung</a></Panel>}
     <Notice text={overview.error}/>
     {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}
     {overview.data && <>
@@ -188,6 +180,8 @@ function Platform({ session }: { session: Session }) {
           <summary>{item.name} · {companyState[item.lifecycle]}</summary>
           <p>Portaladresse <strong>/unternehmen/{item.slug}</strong></p>
           {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
+          {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
+            companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
         </details>)}</div>
         {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
         {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
@@ -307,7 +301,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
   const filters = [...new Set(result.map(row => row.state))];
   const detailPath = (row: RequestRow) => base + '/anfragen/' + row.id + '?ansicht=' + (isCompany ? 'betrieb' : 'technik');
   if (!session.signedIn) return <Panel><h1>{isCompany ? 'Servicebetrieb' : 'Technik'}</h1><p>Melden Sie sich mit Ihrem Arbeitskonto an.</p>
-    <a href={login} className="primary">Anmelden</a></Panel>;
+    <a href={login + '&mode=workforce'} className="primary">Anmelden</a></Panel>;
   if (!allowed) return <Panel><h1>Zugang zum Arbeitsbereich</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
   return <>
     <div id="overview" className="workspace-heading"><p className="eyebrow">{company.name}</p>
@@ -358,6 +352,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       {technicians.data?.length === 0 && <p className="muted">Aktuell sind keine Techniker zuweisbar.</p>}
       {technicians.data && <ul className="staff-directory">{technicians.data.map(tech => <li key={tech.id}><UserRound aria-hidden/>{tech.name}</li>)}</ul>}
     </section>}
+    {isCompany && company.role === 'admin' && <Team api={api} session={session}/>}
     <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>
   </>;
 }

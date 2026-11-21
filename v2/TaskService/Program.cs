@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OAuth.Claims;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
@@ -59,6 +60,14 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = 429;
     options.AddConcurrencyLimiter("invoice-upload", limiter => { limiter.PermitLimit = 3; limiter.QueueLimit = 0; });
+    options.AddPolicy("invitations", http => RateLimitPartition.GetFixedWindowLimiter(
+        Actor.Subject(http.User) ?? http.Connection.RemoteIpAddress?.ToString() ?? "local",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(10),
+            QueueLimit = 0
+        }));
     options.AddPolicy("guest", http => RateLimitPartition.GetFixedWindowLimiter(
         http.Connection.RemoteIpAddress?.ToString() ?? "local",
         _ => new FixedWindowRateLimiterOptions
@@ -99,8 +108,18 @@ if (identityConfigured)
         options.MapInboundClaims = false;
         options.SaveTokens = false;
         options.Scope.Add("email");
+        options.GetClaimsFromUserInfoEndpoint = builder.Configuration.GetValue<bool>("Identity:UseUserInfo");
+        if (options.GetClaimsFromUserInfoEndpoint)
+            options.ClaimActions.MapUniqueJsonKey("email_verified", "email_verified");
         options.Events = new OpenIdConnectEvents
         {
+            OnRedirectToIdentityProvider = context =>
+            {
+                if (context.Properties.Items.TryGetValue("taskservice:workforce", out var workforce) && workforce == "yes" &&
+                    builder.Configuration["Identity:PrivilegedAcr"] is { Length: > 0 } acr)
+                    context.ProtocolMessage.AcrValues = acr;
+                return Task.CompletedTask;
+            },
             OnTokenValidated = context =>
             {
                 if (context.Principal?.Identity is not ClaimsIdentity identity ||
@@ -152,10 +171,15 @@ app.MapGet("/health/ready", async (ServiceDb db, CancellationToken ct) =>
         : Results.StatusCode(503));
 app.MapGet("/api/v1/session", (HttpContext http, IAntiforgery antiforgery) =>
     Results.Ok(new { signedIn = Actor.Subject(http.User) is not null, csrfToken = antiforgery.GetAndStoreTokens(http).RequestToken }));
-app.MapGet("/api/v1/login", (string? returnTo) => identityConfigured
-    ? Results.Challenge(new AuthenticationProperties { RedirectUri = SafeReturnPath(returnTo) },
-        [OpenIdConnectDefaults.AuthenticationScheme])
-    : ApiProblem.Error(503, "identity_unavailable", "Die Anmeldung ist noch nicht konfiguriert."));
+app.MapGet("/api/v1/login", (string? returnTo, string? mode) =>
+{
+    if (!identityConfigured)
+        return ApiProblem.Error(503, "identity_unavailable", "Die Anmeldung ist noch nicht konfiguriert.");
+    var properties = new AuthenticationProperties { RedirectUri = SafeReturnPath(returnTo) };
+    if (mode == "workforce")
+        properties.Items["taskservice:workforce"] = "yes";
+    return Results.Challenge(properties, [OpenIdConnectDefaults.AuthenticationScheme]);
+});
 app.MapPost("/api/v1/logout", () => Results.SignOut(authenticationSchemes:
     [CookieAuthenticationDefaults.AuthenticationScheme])).AddEndpointFilter<CsrfFilter>();
 app.MapTaskService();

@@ -32,6 +32,7 @@ public static partial class Endpoints
         MapReports(group);
         MapInvoices(group);
         MapPlatform(app);
+        MapTeam(group);
     }
 
     internal static async Task<Tenant?> FindTenant(ServiceDb db, string slug, CancellationToken ct) =>

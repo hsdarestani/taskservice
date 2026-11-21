@@ -33,7 +33,16 @@ with sync_playwright() as playwright:
         response.request.method == "POST") as creation:
         setup.get_by_role("button", name="Unternehmen anlegen").click()
     assert creation.value.status == 201, (creation.value.status, creation.value.text())
-    expect(platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)).to_be_visible()
+    company = platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)
+    expect(company).to_be_visible()
+    company.click()
+    platform_page.get_by_role("button", name="Ersteinrichtung anzeigen").click()
+    platform_page.get_by_label("Name der Administration").fill("Test Administration")
+    platform_page.get_by_label("E-Mail-Adresse der Administration").fill("browser-initial@example.invalid")
+    with platform_page.expect_response(lambda r: r.url.endswith("/setup") and r.request.method == "POST") as onboarding:
+        platform_page.get_by_role("button", name="Erste Einladung erstellen").click()
+    assert onboarding.value.status == 201
+    expect(platform_page.get_by_text("Erste Administration eingeladen", exact=True)).to_be_visible()
     for width, height in ((390, 844), (768, 1024), (1366, 900)):
         platform_page.set_viewport_size({"width": width, "height": height})
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
@@ -63,6 +72,18 @@ with sync_playwright() as playwright:
                 expect(desk_page.get_by_role("table")).to_be_visible()
                 desk_page.get_by_label("Vorgang suchen").clear()
                 expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
+                if width == 1366:
+                    team = desk_page.locator("#team")
+                    team.get_by_label("Name", exact=True).fill("Test Teammitglied")
+                    team.get_by_label("Geschäftliche E-Mail-Adresse").fill("browser-staff@example.invalid")
+                    with desk_page.expect_response(lambda r: r.url.endswith("/team/invitations") and r.request.method == "POST") as invite:
+                        team.get_by_role("button", name="Einladung erstellen").click()
+                    assert invite.value.status == 201
+                    expect(team.get_by_text("Test Teammitglied", exact=True)).to_be_visible()
+                    team.screenshot(path=output / "team-admin-desktop.png")
+                    team.get_by_role("button", name="Widerrufen").click()
+                    expect(team.get_by_text("Einladung widerrufen.", exact=True)).to_be_visible()
+                    desk_page.evaluate("window.scrollTo(0, 0)")
             desk_page.screenshot(path=output / f"{route}-dashboard-{width}.png")
             desk.close()
 

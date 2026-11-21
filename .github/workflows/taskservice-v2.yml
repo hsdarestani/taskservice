@@ -44,6 +44,7 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: dotnet test v2/tests/TaskService.Tests.csproj --configuration Release
         env:
+          TASKSERVICE_GUEST_BROWSER: ${{ github.workspace }}/v2/tests/guest_browser.py
           TASKSERVICE_REPORT_BROWSER: ${{ github.workspace }}/v2/tests/report_browser.py
           TASKSERVICE_INVOICE_BROWSER: ${{ github.workspace }}/v2/tests/invoice_browser.py
           TASKSERVICE_BROWSER_WEBROOT: ${{ github.workspace }}/v2/web/dist

@@ -81,6 +81,8 @@ public sealed class InvoiceScanWorker(IServiceScopeFactory scopes, InvoiceScanne
                 {
                     await ProcessNext(db, tenant, scanner, logger, ct);
                     db.ChangeTracker.Clear();
+                    await RequestPhotoScan.ProcessNext(db, tenant, scanner, logger, ct);
+                    db.ChangeTracker.Clear();
                 }
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)

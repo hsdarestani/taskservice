@@ -3,6 +3,7 @@ using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using TaskService.Database;
@@ -20,7 +21,9 @@ public static partial class Endpoints
         group.MapGet("/manifest.webmanifest", TenantManifest);
         group.MapGet("/requests", Requests);
         group.MapGet("/requests/{id:guid}", Request);
-        group.MapPost("/requests", Submit).RequireRateLimiting("guest");
+        group.MapPost("/requests", Submit).RequireRateLimiting("guest").WithMetadata(new RequestSizeLimitAttribute(1450000));
+        group.MapGet("/catalog", ReadCatalog);
+        group.MapGet("/requests/{id:guid}/photos/{photoId:guid}", DownloadPhoto);
         group.MapPost("/requests/{id:guid}/claim", ClaimRequest).RequireRateLimiting("guest");
         group.MapPost("/requests/{id:guid}/commands", Change);
         group.MapGet("/technicians", Technicians);
@@ -50,7 +53,7 @@ public static partial class Endpoints
             start_url = entry,
             scope = "/",
             display = "standalone",
-            background_color = "#faf9f6",
+            background_color = "#f5f8fc",
             theme_color = tenant.Accent,
             icons = new[] { 192, 512 }.Select(size => new
             {
@@ -68,7 +71,7 @@ public static partial class Endpoints
         return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, Role = actor.Membership?.Role });
     }
 
-    private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, HttpContext http, CancellationToken ct)
+    private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, string? q, HttpContext http, CancellationToken ct)
     {
         if (await FindTenant(db, slug, ct) is not { } tenant)
             return ApiProblem.NotFound();
@@ -82,12 +85,26 @@ public static partial class Endpoints
         else if (!actor.IsCompany)
         {
             var technician = actor.IsTechnician ? actor.Membership!.Id : (Guid?)null;
-            query = query.Where(x => x.CustomerKey == actor.Key || (technician != null && x.TechnicianId == technician));
+            query = view == "staff"
+                ? query.Where(x => technician != null && x.TechnicianId == technician)
+                : query.Where(x => x.CustomerKey == actor.Key || (technician != null && x.TechnicianId == technician));
+        }
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            if (q.Length > 160)
+                return ApiProblem.Error(422, "invalid_search", "Der Suchbegriff darf höchstens 160 Zeichen umfassen.");
+            var search = q.Trim().ToLowerInvariant();
+            query = query.Where(x => x.Title.ToLower().Contains(search));
         }
         if (cursor is { } id)
             query = query.Where(x => x.Id.CompareTo(id) > 0);
         var rows = await query.OrderBy(x => x.Id).Take(51)
-            .Select(x => new { x.Id, x.Title, x.State, x.Revision, x.CreatedAt, x.TechnicianId }).ToListAsync(ct);
+            .Select(x => new
+            {
+                x.Id, x.Title, x.State, x.Revision, x.CreatedAt, x.TechnicianId, x.ServiceCategory,
+                Appointment = db.Appointments.Where(a => a.TenantId == x.TenantId && a.RequestId == x.Id && !a.Cancelled)
+                    .Select(a => new { a.StartsAt, a.EndsAt, a.ArrivalStatus, a.TimeZone }).FirstOrDefault()
+            }).ToListAsync(ct);
         return Results.Ok(new
         {
             items = rows.Take(50).Select(x => new
@@ -95,7 +112,7 @@ public static partial class Endpoints
                 x.Id, x.Title,
                 State = view != "mine" && (actor.IsCompany || actor.IsTechnician && actor.Membership!.Id == x.TechnicianId)
                     ? x.State : Workflow.CustomerState(x.State),
-                x.Revision, x.CreatedAt
+                x.Revision, x.CreatedAt, x.ServiceCategory, x.Appointment
             }),
             nextCursor = rows.Count > 50 ? rows[49].Id : (Guid?)null
         });
@@ -121,6 +138,11 @@ public static partial class Endpoints
             State = staff ? request.State : Workflow.CustomerState(request.State),
             TechnicianId = staff ? request.TechnicianId : null,
             CanReadInternal = staff,
+            request.ServiceCategory,
+            ContactName = actor.IsCompany ? request.ContactName : null,
+            ContactPhone = actor.IsCompany ? request.ContactPhone : null,
+            Photos = await db.RequestPhotos.Where(x => x.TenantId == tenant.Id && x.RequestId == id)
+                .OrderBy(x => x.Ordinal).Select(x => new { x.Id, x.Ordinal, x.ScanStatus }).ToListAsync(ct),
             History = history.Select(x => new
             {
                 State = staff ? x.State : Workflow.CustomerState(x.State), x.At,
@@ -154,6 +176,8 @@ public static partial class Endpoints
         if (!Valid(body.Title, 160) || !Valid(body.Description, 4000) || !Valid(body.Email, 254) ||
             !MailAddress.TryCreate(body.Email, out var mail) || mail.Address != body.Email)
             return ApiProblem.Error(422, "invalid_request", "Bitte ergänzen Sie Betreff, Beschreibung und eine gültige E-Mail-Adresse.");
+        if (!ValidIntake(body))
+            return ApiProblem.Error(422, "invalid_intake_details", "Bitte prüfen Sie Service, Kontaktdaten und die ausgewählten Fotos.");
         if (!Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) ||
             publicBase.Scheme != "https" || string.IsNullOrWhiteSpace(config["Mail:Host"]))
             return ApiProblem.Error(503, "verification_unavailable", "Die Bestätigung per E-Mail ist derzeit nicht verfügbar.");
@@ -171,10 +195,12 @@ public static partial class Endpoints
         var request = new ServiceRequest
         {
             TenantId = tenant.Id, Id = id, Title = body.Title.Trim(), Description = body.Description.Trim(),
-            ContactEmail = mail.Address, CreatedAt = DateTimeOffset.UtcNow
+            ContactEmail = mail.Address, CreatedAt = DateTimeOffset.UtcNow, ServiceCategory = body.Category,
+            ContactName = body.Name?.Trim(), ContactPhone = body.Phone?.Trim()
         };
         db.Requests.Add(request);
         await db.SaveChangesAsync(ct);
+        QueuePhotos(db, request, body.Photos);
         var token = RandomNumberGenerator.GetBytes(32);
         db.Claims.Add(new(tenant.Id, id, SHA256.HashData(token), request.CreatedAt.AddHours(24)));
         Workflow.Record(db, request, actor, "request.created");
@@ -440,7 +466,8 @@ public static partial class Endpoints
     }
 }
 
-public sealed record NewRequest(string Title, string Description, string Email);
+public sealed record NewRequest(string Title, string Description, string Email, string? Category = null,
+    string? Name = null, string? Phone = null, NewRequestPhoto?[]? Photos = null);
 public sealed record ClaimBody(string Token);
 public sealed record RequestCommand(string Action, Guid? TechnicianId, DateTimeOffset? StartsAt,
     DateTimeOffset? EndsAt, string? ArrivalStatus, string? StartsAtLocal, string? EndsAtLocal, string? StartsAtFold,

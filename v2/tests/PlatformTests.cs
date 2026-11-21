@@ -92,6 +92,63 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public async Task RequestPhotosAreTransactionalQuarantinedAndPrivateAfterScan()
+    {
+        await using var guestHost = lab.IsolatedHost();
+        using var guest = guestHost.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        using var owner = guestHost.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        owner.DefaultRequestHeaders.Add("X-Test-Subject", "photo-owner");
+        using var stranger = lab.Client("photo-stranger");
+        using var admin = lab.Client("admin-a", mfa: true);
+        var original = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+lpb8AAAAASUVORK5CYII=");
+        var form = new NewRequest("Garten prüfen", "Synthetisches Anliegen mit einem Foto.", "qa@example.invalid",
+            "garden", "Test Kunde", "+49 1234567", [new("image/png", original)]);
+        var endpoint = lab.Base() + "/requests";
+        var bad = await lab.Post(guest, endpoint, form with { Photos = [new("image/webp", original)] });
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, bad.StatusCode);
+
+        var key = Guid.NewGuid().ToString();
+        var first = await lab.Post(guest, endpoint, form, key);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var replay = await lab.Post(guest, endpoint, form, key);
+        Assert.Equal(await first.Content.ReadAsStringAsync(), await replay.Content.ReadAsStringAsync());
+        var id = (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var path = lab.Request(id);
+        var details = await admin.GetFromJsonAsync<JsonElement>(path);
+        Assert.Equal("garden", details.GetProperty("serviceCategory").GetString());
+        Assert.Equal("Test Kunde", details.GetProperty("contactName").GetString());
+        var file = Assert.Single(details.GetProperty("photos").EnumerateArray());
+        var download = path + "/photos/" + file.GetProperty("id").GetGuid();
+        Assert.Equal("pending", file.GetProperty("scanStatus").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync(download)).StatusCode);
+
+        var token = await lab.TokenFor(id, guestHost.Services);
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(owner, path + "/claim", new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(download)).StatusCode);
+
+        await using var runtime = new NpgsqlConnection(lab.Runtime);
+        await runtime.OpenAsync();
+        await using (var tx = await runtime.BeginTransactionAsync())
+        {
+            await Lab.Scope(runtime, lab.TenantA);
+            Assert.Equal(0L, await Lab.Read<long>(runtime, "select count(*) from ts.request_photo_files"));
+        }
+        Assert.True(await lab.ProcessPhoto(Lab.LocalClamAv() ?? new FixtureInvoiceScanner(clean: true)));
+        var fetched = await owner.GetAsync(download);
+        Assert.Equal(HttpStatusCode.OK, fetched.StatusCode);
+        Assert.Equal(original, await fetched.Content.ReadAsByteArrayAsync());
+        Assert.True(fetched.Headers.CacheControl?.NoStore);
+        Assert.Contains("attachment", fetched.Content.Headers.ContentDisposition?.DispositionType);
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.GetAsync(download)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync(lab.Request(id, "other") +
+            "/photos/" + file.GetProperty("id").GetGuid())).StatusCode);
+
+        if (Environment.GetEnvironmentVariable("TASKSERVICE_GUEST_BROWSER") is { Length: > 0 } browserScript)
+            await lab.RunBrowser(browserScript, invoice: false);
+    }
+
+    [Fact]
     public async Task GuestPostIsIdempotentAndRequiresOriginAndToken()
     {
         using var guest = lab.Client();
@@ -601,6 +658,8 @@ public sealed class Lab : IAsyncLifetime
         });
     }
 
+    public WebApplicationFactory<Program> IsolatedHost() => factory.WithWebHostBuilder(_ => { });
+
     public HttpClient Client(string? subject = null, bool mfa = false)
     {
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -683,13 +742,19 @@ public sealed class Lab : IAsyncLifetime
         return await InvoiceScanWorker.ProcessNext(db, TenantA, scanner, NullLogger.Instance, CancellationToken.None);
     }
 
-    public async Task<string> TokenFor(Guid request)
+    public async Task<bool> ProcessPhoto(InvoiceScanner scanner)
+    {
+        await using var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(worker).Options);
+        return await RequestPhotoScan.ProcessNext(db, TenantA, scanner, NullLogger.Instance, CancellationToken.None);
+    }
+
+    public async Task<string> TokenFor(Guid request, IServiceProvider? services = null)
     {
         await using var conn = new NpgsqlConnection(admin);
         await conn.OpenAsync();
         await using var command = new NpgsqlCommand("SELECT payload FROM ts.outbox WHERE kind='mail'", conn);
         await using var rows = await command.ExecuteReaderAsync();
-        var protector = factory.Services.GetRequiredService<IDataProtectionProvider>().CreateProtector("taskservice-outbox-mail-v1");
+        var protector = (services ?? factory.Services).GetRequiredService<IDataProtectionProvider>().CreateProtector("taskservice-outbox-mail-v1");
         while (await rows.ReadAsync())
         {
             var content = JsonSerializer.Deserialize<MailPayload>(protector.Unprotect(rows.GetString(0)))!.Content;

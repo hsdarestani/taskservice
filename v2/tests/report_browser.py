@@ -34,8 +34,37 @@ with sync_playwright() as playwright:
         setup.get_by_role("button", name="Unternehmen anlegen").click()
     assert creation.value.status == 201, (creation.value.status, creation.value.text())
     expect(platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)).to_be_visible()
-    platform_page.screenshot(path=output / "platform-admin-desktop.png", full_page=True)
+    for width, height in ((390, 844), (768, 1024), (1366, 900)):
+        platform_page.set_viewport_size({"width": width, "height": height})
+        assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
+        platform_page.screenshot(path=output / f"platform-dashboard-{width}.png")
     platform.close()
+
+    for role, route, heading in (
+        ("admin-a", "betrieb", "Serviceübersicht"), ("tech-a", "technik", "Meine Einsätze"),
+        ("customer-a", "konto", "Meine Anfragen"),
+    ):
+        for width, height in ((390, 844), (768, 1024), (1366, 900)):
+            headers = {"X-Test-Subject": role}
+            if route == "betrieb":
+                headers["X-Test-Mfa"] = "1"
+            desk = browser.new_context(viewport={"width": width, "height": height}, ignore_https_errors=True,
+                extra_http_headers=headers)
+            desk_page = desk.new_page()
+            desk_page.goto(origin + "/unternehmen/lab/" + route, wait_until="domcontentloaded")
+            expect(desk_page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+            expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
+            assert desk_page.evaluate("document.documentElement.scrollWidth") <= width
+            if route == "betrieb":
+                desk_page.get_by_label("Vorgang suchen").fill("Testvorgang")
+                desk_page.get_by_role("button", name="Suchen", exact=True).click()
+                expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
+                desk_page.get_by_label("Sortierung").select_option("title")
+                expect(desk_page.get_by_role("table")).to_be_visible()
+                desk_page.get_by_label("Vorgang suchen").clear()
+                expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
+            desk_page.screenshot(path=output / f"{route}-dashboard-{width}.png")
+            desk.close()
 
     def open_as(subject, privileged=False, mobile=False):
         headers = {"X-Test-Subject": subject}

@@ -51,6 +51,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         ConfigureReports(model);
         ConfigureInvoices(model);
         ConfigurePlatform(model);
+        ConfigureIntake(model);
         foreach (var entity in model.Model.GetEntityTypes())
         foreach (var property in entity.GetProperties())
             property.SetColumnName(NameBoundary().Replace(property.Name, "_$1").ToLowerInvariant());
@@ -76,6 +77,9 @@ public sealed class ServiceRequest
     public required string Title { get; init; }
     public required string Description { get; init; }
     public required string ContactEmail { get; init; }
+    public string? ServiceCategory { get; init; }
+    public string? ContactName { get; init; }
+    public string? ContactPhone { get; init; }
     public string? CustomerKey { get; set; }
     public Guid? TechnicianId { get; set; }
     public string State { get; set; } = "received";

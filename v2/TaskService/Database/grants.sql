@@ -27,3 +27,6 @@ GRANT USAGE ON SCHEMA ts TO taskservice_platform;
 GRANT SELECT, INSERT ON ts.tenants TO taskservice_platform;
 GRANT UPDATE (name, accent, active, lifecycle, revision) ON ts.tenants TO taskservice_platform;
 GRANT SELECT, INSERT ON ts.platform_audit, ts.platform_commands TO taskservice_platform;
+GRANT SELECT, INSERT ON ts.request_photos, ts.request_photo_files TO taskservice_api;
+GRANT SELECT ON ts.request_photos, ts.request_photo_files TO taskservice_worker;
+GRANT UPDATE (scan_status) ON ts.request_photos TO taskservice_worker;

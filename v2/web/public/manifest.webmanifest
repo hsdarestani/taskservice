@@ -6,8 +6,8 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#faf9f6",
-  "theme_color": "#0a6159",
+  "background_color": "#f5f8fc",
+  "theme_color": "#075aca",
   "icons": [
     { "src": "/icons/taskservice-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "/icons/taskservice-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }

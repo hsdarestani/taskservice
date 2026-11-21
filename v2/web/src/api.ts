@@ -1,13 +1,19 @@
 export type Session = { signedIn: boolean; csrfToken: string };
 export type Company = { slug: string; name: string; accent: string; role?: string };
-export type RequestRow = { id: string; title: string; state: string; revision: number; createdAt: string };
+export type AppointmentView = {
+  startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;
+  updatedAt?: string; customerConfirmedAt?: string; customerNote?: string;
+};
+export type RequestRow = {
+  id: string; title: string; state: string; revision: number; createdAt: string;
+  serviceCategory?: string; appointment?: AppointmentView;
+};
 export type Detail = RequestRow & {
   description: string;
   canReadInternal: boolean;
-  appointment?: {
-    startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;
-    updatedAt?: string; customerConfirmedAt?: string; customerNote?: string;
-  };
+  contactName?: string;
+  contactPhone?: string;
+  photos: { id: string; ordinal: number; scanStatus: 'pending' | 'clean' | 'quarantined' | 'failed' }[];
   actions: string[];
   history: { state: string; at: string; privateNote?: string }[];
 };

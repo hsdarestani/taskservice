@@ -4,7 +4,11 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { get, send, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
+import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
+import type { ServiceCategory } from './CustomerPortal';
 import './styles.css';
+import './portal.css';
 
 const states: Record<string, string> = {
   received: 'Eingegangen', verified: 'Bestätigt', under_review: 'In Prüfung',
@@ -53,50 +57,96 @@ function Badge({ state }: { state: string }) {
   return <span className={'badge ' + state}>{states[state] || state}</span>;
 }
 
+type Portal = 'customer' | 'company' | 'technician' | 'platform';
+
 function App() {
   const session = useLoad<Session>('/api/v1/session');
   const company = useLoad<Company>(slug ? api : undefined, session.data?.signedIn ? 1 : 0);
-  const isStaff = company.data?.role === 'admin' || company.data?.role === 'dispatcher';
+  const role = company.data?.role;
+  const requestedView = new URLSearchParams(location.search).get('ansicht');
+  const staffDetail = requestId && path[4] !== 'bestaetigen' && requestedView !== 'konto';
+  const portal: Portal = path[0] === 'plattform' ? 'platform'
+    : path[2] === 'technik' || staffDetail && role === 'technician' ? 'technician'
+    : path[2] === 'betrieb' || staffDetail && (role === 'admin' || role === 'dispatcher') ? 'company'
+    : 'customer';
+  const atCustomerHome = portal === 'customer' && !path[2] && Boolean(slug);
+  const catalog = useLoad<ServiceCategory[]>(atCustomerHome ? api + '/catalog' : undefined);
   useEffect(() => {
-    if (company.data?.accent && /^#[a-f0-9]{6}$/i.test(company.data.accent))
-      document.documentElement.style.setProperty('--brand-accent', company.data.accent);
+    const accent = company.data?.accent;
+    if (accent && /^#[a-f0-9]{6}$/i.test(accent)) document.documentElement.style.setProperty('--tenant-accent', accent);
   }, [company.data?.accent]);
-  const portal = path[2] === 'betrieb' ? 'Betrieb' : path[2] === 'technik' ? 'Technik' : 'Kundenportal';
+
+  if (!session.data || slug && !company.data) return <main id="inhalt"><Notice text={session.error || company.error}/>
+    {!session.error && !company.error && <p role="status">TaskService wird geladen …</p>}</main>;
+  const loginLink = '/api/v1/login?returnTo=' + encodeURIComponent(
+    atCustomerHome ? base + '/konto' : location.pathname);
+  async function logout() {
+    try { await send('/api/v1/logout', {}, session.data!.csrfToken); location.assign(base || '/'); }
+    catch { location.reload(); }
+  }
+  if (atCustomerHome && company.data) return <>
+    <a className="skip" href="#inhalt">Zum Inhalt</a>
+    <CustomerHome base={base} api={api} company={company.data} session={session.data}
+      categories={catalog.data} catalogError={catalog.error}/>
+  </>;
+  const body = requestId && path[4] === 'bestaetigen'
+    ? <ClaimRequest session={session.data} id={requestId}/>
+    : requestId ? <RequestDetail session={session.data} id={requestId} portal={portal}/>
+    : portal === 'platform' ? <Platform session={session.data}/>
+    : company.data && portal !== 'customer'
+      ? <Dashboard company={company.data} session={session.data} portal={portal}/>
+      : company.data ? <Account session={session.data} loginLink={loginLink} logout={logout}/>
+      : <Panel><h1>Ihr Kontakt zum Servicebetrieb</h1><p>Öffnen Sie das Portal Ihres Servicebetriebs über dessen persönlichen Link.</p></Panel>;
 
   return <>
     <a className="skip" href="#inhalt">Zum Inhalt</a>
-    <header className="bar">
-      <a href={base || '/'} className="brand"><span aria-hidden="true">TS</span>{company.data?.name || 'TaskService'}</a>
-      <nav aria-label="Hauptnavigation">
-        {slug && <a href={base}>Kundenportal</a>}
-        {isStaff && <a href={base + '/betrieb'}>Betrieb</a>}
-        {company.data?.role === 'technician' && <a href={base + '/technik'}>Technik</a>}
-        {session.data?.signedIn
-          ? <button className="link" onClick={async () => {
-            try { await send('/api/v1/logout', {}, session.data!.csrfToken); location.assign(base || '/'); }
-            catch { location.reload(); }
-          }}>Abmelden</button>
-          : <a href={login}>Anmelden</a>}
-      </nav>
-    </header>
-    <main id="inhalt">
-      <Notice text={session.error || company.error}/>
-      {!session.data && !session.error && <p role="status">Sitzung wird geladen …</p>}
-      {!slug && path[0] === 'plattform' && session.data && <Platform session={session.data}/>}
-      {!slug && path[0] !== 'plattform' && <Panel>
-        <p className="eyebrow">Serviceportal</p>
-        <h1>Ihr Kontakt zum Servicebetrieb</h1>
-        <p>Öffnen Sie das Portal Ihres Servicebetriebs über dessen persönlichen Link.</p>
-      </Panel>}
-      {company.data && session.data && <>
-        {requestId && path[4] === 'bestaetigen'
-          ? <ClaimRequest session={session.data} id={requestId}/>
-          : requestId
-            ? <RequestDetail session={session.data} id={requestId}/>
-            : <Dashboard company={company.data} session={session.data} portal={portal}/>}
-      </>}
-    </main>
+    {portal === 'customer' ? <div className="consumer-account">
+      {company.data ? <CustomerHeader base={base} company={company.data}/> : <header className="bar"><Wordmark href="/"/></header>}
+      <main id="inhalt" className="account-main">{body}</main>
+      {company.data && <CustomerNav base={base} account/>}
+    </div> : <Workspace portal={portal} company={company.data} signedIn={session.data.signedIn} logout={logout}>{body}</Workspace>}
   </>;
+}
+
+const workspaceLabels = { platform: 'Plattformverwaltung', company: 'Servicebetrieb', technician: 'Technik' };
+const workspaceMenus = {
+  platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
+    { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
+  company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
+    { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Unternehmenschat', id: 'conversations', icon: MessagesSquare }],
+  technician: [{ name: 'Einsätze', id: 'requests', icon: ClipboardList }, { name: 'Tagesplan', id: 'schedule', icon: CalendarDays },
+    { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
+};
+
+function Workspace({ portal, company, signedIn, logout, children }: {
+  portal: Exclude<Portal, 'customer'>; company?: Company; signedIn: boolean; logout: () => Promise<void>; children: ReactNode;
+}) {
+  const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
+  const menu = workspaceMenus[portal];
+  const [hash, setHash] = useState(location.hash.slice(1) || menu[0].id);
+  useEffect(() => {
+    const listener = () => setHash(location.hash.slice(1) || menu[0].id);
+    addEventListener('hashchange', listener);
+    return () => removeEventListener('hashchange', listener);
+  }, [menu]);
+  return <div className={'workspace workspace-' + portal}>
+    <aside className="workspace-sidebar">
+      <Wordmark href={root}/><p className="workspace-label">{workspaceLabels[portal]}</p>
+      <nav aria-label="Arbeitsbereiche">
+        {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && hash === item.id ? 'location' : undefined}>
+          <item.icon size={19} aria-hidden/><span>{item.name}</span>
+        </a>)}
+      </nav>
+    </aside>
+    <div className="workspace-content">
+      <header className="workspace-top">
+        <div>{portal === 'technician' && <Wordmark href={root}/>}<strong>{company?.name || 'TaskService'}</strong>
+          <small>{workspaceLabels[portal]}</small></div>
+        {signedIn ? <button className="text-button" onClick={logout}>Abmelden</button> : <a href={login}>Anmelden</a>}
+      </header>
+      <main id="inhalt" className="workspace-main">{children}</main>
+    </div>
+  </div>;
 }
 
 type PlatformCompany = {
@@ -120,14 +170,19 @@ function Platform({ session }: { session: Session }) {
     ? platformApi + '/audit' + (auditCursor ? '?' + new URLSearchParams({ cursor: auditCursor.id, before: auditCursor.before }) : '') : undefined, reload);
   const refresh = () => { setCursor(''); setAuditCursor(undefined); setReload(x => x + 1); };
   return <>
-    <div className="hero"><h1>Plattformverwaltung</h1><p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
+    <div id="overview" className="workspace-heading"><p className="eyebrow">TaskService</p><h1>Plattformverwaltung</h1>
+      <p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
     {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Konto mit Mehrfaktor-Anmeldung.</p>
       <a className="primary" href={login}>Zur Anmeldung</a></Panel>}
     <Notice text={overview.error}/>
     {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}
     {overview.data && <>
-      <Panel><h2>Neues Unternehmen</h2><CompanyEditor session={session} refresh={refresh}/></Panel>
-      <Panel><h2>Unternehmen</h2>
+      <div className="workspace-metrics" aria-label="Unternehmen in dieser Ansicht">
+        <div><Building2 aria-hidden/><span>Unternehmen</span><strong>{overview.data.items.length}</strong></div>
+        <div><Activity aria-hidden/><span>Aktive Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'active').length}</strong></div>
+        <div><ShieldCheck aria-hidden/><span>Gesperrte Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'suspended').length}</strong></div>
+      </div>
+      <div className="platform-company-grid" id="companies"><Panel><h2>Unternehmen</h2>
         {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
         <div className="report-history">{overview.data.items.map(item => <details key={item.slug}>
           <summary>{item.name} · {companyState[item.lifecycle]}</summary>
@@ -136,8 +191,8 @@ function Platform({ session }: { session: Session }) {
         </details>)}</div>
         {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
         {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-      </Panel>
-      <Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
+      </Panel><Panel><h2>Neues Unternehmen</h2><CompanyEditor session={session} refresh={refresh}/></Panel></div>
+      <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
         {audit.data?.items.length === 0 && <p className="muted">Es sind noch keine Änderungen erfasst.</p>}
         {audit.data && <ul className="rows">{audit.data.items.map(row => <li key={row.id}>
           <span><strong>{platformAction[row.action]}</strong><small>{row.slug}</small>
@@ -146,7 +201,7 @@ function Platform({ session }: { session: Session }) {
         </li>)}</ul>}
         {audit.data?.next && <button onClick={() => setAuditCursor(audit.data!.next)}>Ältere Änderungen</button>}
         {auditCursor && <button onClick={() => setAuditCursor(undefined)}>Neueste Änderungen</button>}
-      </Panel>
+      </Panel></div>
     </>}
   </>;
 }
@@ -177,7 +232,7 @@ function CompanyEditor({ session, refresh, company }: { session: Session; refres
     {identity
       ? <div className="columns">
         <label>Unternehmensname<input name="name" defaultValue={company?.name} maxLength={120} required/></label>
-        <label>Markenfarbe<input name="accent" type="color" defaultValue={company?.accent || '#0a6159'} required/></label>
+        <label>Markenfarbe<input name="accent" type="color" defaultValue={company?.accent || '#075aca'} required/></label>
       </div>
       : <><label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>
         {action === 'deactivate' && <p>Das Portal wird deaktiviert. Die gespeicherten Vorgänge bleiben erhalten.</p>}
@@ -187,61 +242,124 @@ function CompanyEditor({ session, refresh, company }: { session: Session; refres
   </form>;
 }
 
-function Dashboard({ company, session, portal }: { company: Company; session: Session; portal: string }) {
-  const authorized = portal === 'Kundenportal' || (portal === 'Technik' ? company.role === 'technician' :
-    company.role === 'admin' || company.role === 'dispatcher');
-  const [cursor, setCursor] = useState('');
-  const list = useLoad<{ items: RequestRow[]; nextCursor?: string }>(
-    session.signedIn && authorized ? api + '/requests?view=' + (portal === 'Kundenportal' ? 'mine' : 'staff') + (cursor ? '&cursor=' + cursor : '') : undefined);
-  if (!authorized) return <Panel><h1>{portal}</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
+type RequestPage = { items: RequestRow[]; nextCursor?: string };
+const categoryNames: Record<string, string> = {
+  repair: 'Reparaturen', cleaning: 'Reinigung', electric: 'Elektro & Sanitär', garden: 'Haus & Garten',
+  furniture: 'Möbelmontage', other: 'Weitere Services',
+};
+const berlinDay = (value: string | Date) => new Intl.DateTimeFormat('sv-SE', {
+  year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Europe/Berlin',
+}).format(new Date(value));
+const berlinTime = (value: string) => new Intl.DateTimeFormat('de-DE', {
+  timeStyle: 'short', timeZone: 'Europe/Berlin',
+}).format(new Date(value));
 
+function Account({ session, loginLink, logout }: { session: Session; loginLink: string; logout: () => Promise<void> }) {
+  const [cursor, setCursor] = useState('');
+  const requests = useLoad<RequestPage>(session.signedIn
+    ? api + '/requests?view=mine' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') : undefined);
   return <>
-    <div className="hero"><p className="eyebrow">{company.name} · {portal}</p>
-      <h1>{portal === 'Betrieb' ? 'Servicevorgänge' : portal === 'Technik' ? 'Meine Einsätze' : 'Ihr Servicekontakt'}</h1>
-      <p>{portal === 'Kundenportal' ? 'Anfragen stellen und den Stand Ihrer Vorgänge verfolgen.' :
-        'Aufträge, Termine und Nachrichten im Überblick.'}</p></div>
-    {portal === 'Kundenportal' && <NewRequest session={session}/>}
-    {session.signedIn && <Panel>
-      <h2>{portal === 'Kundenportal' ? 'Meine Anfragen' : 'Vorgänge und Einsätze'}</h2><Notice text={list.error}/>
-      {!list.data && !list.error && <p role="status">Vorgänge werden geladen …</p>}
-      {list.data?.items.length === 0 && <p className="muted">Hier gibt es noch keine Vorgänge.</p>}
-      {list.data && <ul className="rows">{list.data.items.map(row => <li key={row.id}>
-        <a href={base + '/anfragen/' + row.id}><strong>{row.title}</strong><small>{date(row.createdAt)}</small></a>
-        <Badge state={row.state}/>
-      </li>)}</ul>}
-      {list.data?.nextCursor && <button onClick={() => setCursor(list.data!.nextCursor!)}>Weitere Vorgänge</button>}
-      {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-    </Panel>}
-    {portal !== 'Kundenportal' && session.signedIn && <Chat session={session} channel="company" title="Unternehmenschat"/>}
+    <div className="account-heading"><div><p className="eyebrow">Kundenkonto</p><h1>Meine Anfragen</h1>
+      <p>Verfolge den Stand deiner Anfragen, Termine und Dokumente.</p></div>
+      {session.signedIn && <button className="text-button" onClick={logout}>Abmelden</button>}
+    </div>
+    {!session.signedIn ? <Panel><div className="account-empty"><UserRound aria-hidden/><h2>In dein Kundenkonto einloggen</h2>
+      <p>Nach der Anmeldung siehst du deine bestätigten Anfragen und Nachrichten.</p>
+      <a className="primary" href={loginLink}>Anmelden</a></div></Panel>
+      : <Panel>
+        <div className="section-line"><h2>Deine Servicevorgänge</h2><a href={base + '?anfrage=neu'}>Neue Anfrage</a></div>
+        <Notice text={requests.error}/>
+        {!requests.data && !requests.error && <p role="status">Anfragen werden geladen …</p>}
+        {requests.data?.items.length === 0 && <div className="account-empty"><ClipboardList aria-hidden/>
+          <h3>Hier erscheinen deine bestätigten Anfragen</h3><p>Wähle einen Service, um eine neue Anfrage zu stellen.</p>
+          <a href={base + '#services'} className="primary">Services entdecken</a></div>}
+        {requests.data && <ul className="request-cards">{requests.data.items.map(row =>
+          <li key={row.id}><a className="request-card" href={base + '/anfragen/' + row.id + '?ansicht=konto'}>
+            <div><small>{row.serviceCategory && categoryNames[row.serviceCategory]}</small><strong>{row.title}</strong>
+              <small>{row.appointment ? 'Termin: ' + date(row.appointment.startsAt) : date(row.createdAt)}</small></div>
+            <Badge state={row.state}/>
+          </a></li>)}</ul>}
+        {requests.data?.nextCursor && <button onClick={() => setCursor(requests.data!.nextCursor!)}>Weitere Anfragen</button>}
+        {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+      </Panel>}
   </>;
 }
 
-function NewRequest({ session }: { session: Session }) {
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [key, setKey] = useState(() => crypto.randomUUID());
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    setError(''); setStatus(''); setBusy(true);
-    try {
-      await send(api + '/requests', Object.fromEntries(new FormData(form)), session.csrfToken, key);
-      setStatus('Ihre Anfrage ist eingegangen. Bitte bestätigen Sie sie über den Link in Ihrer E-Mail.');
-      form.reset();
-      setKey(crypto.randomUUID());
-    } catch (x) { setError((x as Error).message); }
-    finally { setBusy(false); }
-  }
-  return <Panel><h2>Neue Serviceanfrage</h2>
-    <form onSubmit={submit} onInput={() => setKey(crypto.randomUUID())}>
-      <label>Betreff<input name="title" maxLength={160} required/></label>
-      <label>E-Mail-Adresse<input name="email" type="email" maxLength={254} required/></label>
-      <label>Beschreibung<textarea name="description" rows={4} maxLength={4000} required/></label>
-      <button className="primary" disabled={busy}>{busy ? 'Wird gesendet …' : 'Anfrage absenden'}</button>
-      <Notice text={error}/><p role="status">{status}</p>
-    </form>
-  </Panel>;
+function Dashboard({ company, session, portal }: { company: Company; session: Session; portal: 'company' | 'technician' }) {
+  const isCompany = portal === 'company';
+  const allowed = isCompany ? company.role === 'admin' || company.role === 'dispatcher' : company.role === 'technician';
+  const [cursor, setCursor] = useState('');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('');
+  const [sort, setSort] = useState(isCompany ? 'recent' : 'appointment');
+  const list = useLoad<RequestPage>(session.signedIn && allowed ? api + '/requests?view=staff'
+    + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') + (query ? '&q=' + encodeURIComponent(query) : '') : undefined);
+  const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany ? api + '/technicians' : undefined);
+  const result = list.data?.items ?? [];
+  const today = berlinDay(new Date());
+  const daily = result.filter(row => row.appointment && berlinDay(row.appointment.startsAt) === today)
+    .sort((a, b) => Date.parse(a.appointment!.startsAt) - Date.parse(b.appointment!.startsAt));
+  const visible = result.filter(row => !filter || row.state === filter).sort((a, b) =>
+    sort === 'title' ? a.title.localeCompare(b.title, 'de')
+      : sort === 'appointment' ? (Date.parse(a.appointment?.startsAt ?? '') || Infinity) -
+        (Date.parse(b.appointment?.startsAt ?? '') || Infinity) : Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const filters = [...new Set(result.map(row => row.state))];
+  const detailPath = (row: RequestRow) => base + '/anfragen/' + row.id + '?ansicht=' + (isCompany ? 'betrieb' : 'technik');
+  if (!session.signedIn) return <Panel><h1>{isCompany ? 'Servicebetrieb' : 'Technik'}</h1><p>Melden Sie sich mit Ihrem Arbeitskonto an.</p>
+    <a href={login} className="primary">Anmelden</a></Panel>;
+  if (!allowed) return <Panel><h1>Zugang zum Arbeitsbereich</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
+  return <>
+    <div id="overview" className="workspace-heading"><p className="eyebrow">{company.name}</p>
+      <h1>{isCompany ? 'Serviceübersicht' : 'Meine Einsätze'}</h1>
+      <p>{isCompany ? 'Anfragen, Disposition und Kommunikation an einem Ort.' : 'Dein Tagesplan, deine Aufträge und Nachrichten.'}</p>
+    </div>
+    {list.data && <div className="workspace-metrics" aria-label="Vorgänge in dieser Ansicht">
+      <div><ClipboardList aria-hidden/><span>{isCompany ? 'Vorgänge' : 'Zugewiesene Einsätze'}</span><strong>{result.length}</strong></div>
+      <div><CalendarDays aria-hidden/><span>Heute geplant</span><strong>{daily.length}</strong></div>
+      <div><Activity aria-hidden/><span>In Arbeit</span><strong>{result.filter(r => r.state === 'in_progress').length}</strong></div>
+    </div>}
+    {!isCompany && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
+      {daily.length === 0 && <p className="muted">Heute sind in dieser Ansicht keine Termine geplant.</p>}
+      <ol>{daily.map(row => <li key={row.id}><time dateTime={row.appointment!.startsAt}>{berlinTime(row.appointment!.startsAt)}</time>
+        <a href={detailPath(row)}>{row.title}<small>Bis {berlinTime(row.appointment!.endsAt)} Uhr</small></a></li>)}</ol>
+    </section>}
+    <section id="requests" className="panel operations-list">
+      <div className="section-line"><h2>{isCompany ? 'Servicevorgänge' : 'Zugewiesene Aufträge'}</h2></div>
+      <form className="workspace-filters" onSubmit={e => {e.preventDefault(); setCursor(''); setFilter(''); setQuery(search.trim());}}>
+        <label>Vorgang suchen<input type="search" value={search} maxLength={160} placeholder="Titel eingeben" onChange={e => {
+          setSearch(e.target.value); if (!e.target.value) {setCursor(''); setQuery('');}
+        }}/></label>
+        <button type="submit" className="primary">Suchen</button>
+        <label>Status<select value={filter} onChange={e => setFilter(e.target.value)}>
+          <option value="">Alle in dieser Ansicht</option>{filters.map(value => <option key={value} value={value}>{states[value]}</option>)}
+        </select></label>
+        <label>Sortierung<select value={sort} onChange={e => setSort(e.target.value)}>
+          <option value="recent">Neueste zuerst</option><option value="appointment">Termin</option><option value="title">Titel A–Z</option>
+        </select></label>
+      </form>
+      <Notice text={list.error}/>
+      {!list.data && !list.error && <p role="status">Vorgänge werden geladen …</p>}
+      {list.data && visible.length === 0 && <p className="muted">{query || filter ? 'Keine passenden Vorgänge gefunden.' : 'Hier gibt es noch keine Vorgänge.'}</p>}
+      {isCompany ? visible.length > 0 && <div className="request-table-wrap"><table className="request-table">
+        <thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th><th scope="col">Termin</th></tr></thead>
+        <tbody>{visible.map(row => <tr key={row.id}><th scope="row"><a href={detailPath(row)}>{row.title}</a>
+          <small>{row.serviceCategory ? categoryNames[row.serviceCategory] : date(row.createdAt)}</small></th>
+          <td><Badge state={row.state}/></td><td>{row.appointment ? date(row.appointment.startsAt) : 'Offen'}</td></tr>)}</tbody>
+      </table></div> : <ul className="request-cards technician-cards">{visible.map(row => <li key={row.id}>
+        <a className="request-card" href={detailPath(row)}><div><strong>{row.title}</strong>
+          <small>{row.appointment ? date(row.appointment.startsAt) : 'Noch kein Termin'}</small></div><Badge state={row.state}/></a>
+      </li>)}</ul>}
+      {list.data?.nextCursor && <button onClick={() => setCursor(list.data!.nextCursor!)}>Weitere Vorgänge</button>}
+      {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+    </section>
+    {isCompany && <section id="technicians" className="panel"><h2>Techniker</h2><Notice text={technicians.error}/>
+      {!technicians.data && !technicians.error && <p role="status">Techniker werden geladen …</p>}
+      {technicians.data?.length === 0 && <p className="muted">Aktuell sind keine Techniker zuweisbar.</p>}
+      {technicians.data && <ul className="staff-directory">{technicians.data.map(tech => <li key={tech.id}><UserRound aria-hidden/>{tech.name}</li>)}</ul>}
+    </section>}
+    <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>
+  </>;
 }
 
 function ClaimRequest({ session, id }: { session: Session; id: string }) {
@@ -270,16 +388,23 @@ function ClaimRequest({ session, id }: { session: Session; id: string }) {
   </Panel>;
 }
 
-function RequestDetail({ session, id }: { session: Session; id: string }) {
+function RequestDetail({ session, id, portal }: { session: Session; id: string; portal: Portal }) {
   const [revision, setRevision] = useState(0);
   const detail = useLoad<Detail>(session.signedIn ? api + '/requests/' + id : undefined, revision);
   const row = detail.data;
   if (!session.signedIn) return <Panel><h1>Servicevorgang</h1><a href={login}>Anmelden</a></Panel>;
   if (!row) return <Panel>{detail.error ? <Notice text={detail.error}/> : <p role="status">Vorgang wird geladen …</p>}</Panel>;
   return <>
-    <div className="hero"><a href={base}>Übersicht</a><h1>{row.title}</h1><Badge state={row.state}/></div>
+    <div className="workspace-heading"><a href={base + (portal === 'company' ? '/betrieb#requests' : portal === 'technician' ? '/technik#requests' : '/konto')}>Übersicht</a>
+      <h1>{row.title}</h1><Badge state={row.state}/></div>
     <div className="columns">
       <Panel><h2>Beschreibung</h2><p className="preserve">{row.description}</p>
+        {row.contactName && <p><strong>Kontakt</strong><br/>{row.contactName}{row.contactPhone && <><br/>{row.contactPhone}</>}</p>}
+        {row.photos?.length > 0 && <div className="attached-photos"><h3>Fotos zur Anfrage</h3><ul>
+          {row.photos.map(photo => <li key={photo.id}>{photo.scanStatus === 'clean'
+            ? <a href={api + '/requests/' + id + '/photos/' + photo.id}>Foto {photo.ordinal} herunterladen</a>
+            : 'Foto ' + photo.ordinal + (photo.scanStatus === 'pending' ? ' · Wird geprüft' : ' · Nicht verfügbar')}</li>)}
+        </ul></div>}
         {row.appointment && <><h2>Einsatztermin</h2>
           <p>{date(row.appointment.startsAt)} bis {date(row.appointment.endsAt)} Uhr (Berlin)</p>
           <Badge state={row.appointment.arrivalStatus}/>

@@ -63,9 +63,9 @@ public static class Workflow
     }
 
     public static void QueueMail(ServiceDb db, Guid tenant, IDataProtectionProvider provider, string to,
-        string subject, string content)
+        string subject, string content, bool hold = false)
     {
-        db.Outbox.Add(new(tenant, Guid.NewGuid(), "mail", ProtectMail(provider, to, subject, content), DateTimeOffset.UtcNow));
+        db.Outbox.Add(new(tenant, Guid.NewGuid(), hold ? "mail_held" : "mail", ProtectMail(provider, to, subject, content), DateTimeOffset.UtcNow));
     }
 
     internal static string ProtectMail(IDataProtectionProvider provider, string to, string subject, string content) =>

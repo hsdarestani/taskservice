@@ -114,7 +114,7 @@ export function CustomerHome({ base, api, company, session, categories, catalogE
         )}</div>
       </section>}
       <section className="customer-benefits" aria-label="So funktioniert deine Anfrage">
-        <div><Check aria-hidden/><strong>Direkt anfragen</strong><p>Starte als Gast, auch ohne Kundenkonto.</p></div>
+        <div><Check aria-hidden/><strong>Direkt anfragen</strong><p>{session.native ? 'Starte mit einem Demo-Kundenkonto.' : 'Starte als Gast, auch ohne Kundenkonto.'}</p></div>
         <div><Camera aria-hidden/><strong>Fotos hinzufügen</strong><p>Zeige dem Servicebetrieb, worum es geht.</p></div>
         <div><ClipboardList aria-hidden/><strong>Anfragen im Blick</strong><p>Verfolge Termine und Nachrichten im Kundenkonto.</p></div>
       </section>
@@ -151,7 +151,7 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
   const [description, setDescription] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(session.email || '');
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -223,10 +223,15 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
         onClick={() => {setStep(step - 1); setError('');}}>Zurück</button>}
       <button type="button" className="icon-button" aria-label="Schließen" onClick={onClose} disabled={busy}><X aria-hidden/></button>
     </div>
-    {result ? <section className="wizard-success">
+    {session.native && !session.signedIn ? <section className="wizard-success">
+      <h2 id="wizard-title" ref={heading} tabIndex={-1}>Mit einem Kundenkonto anfragen</h2>
+      <p>Erstelle ein Konto mit Testdaten, um deine Anfrage später wiederzufinden.</p>
+      <a className="primary" href={'/api/v1/login?returnTo=' + encodeURIComponent(base)}>Zur Anmeldung</a>
+    </section> : result ? <section className="wizard-success">
       <span className="success-icon"><Check aria-hidden/></span>
       <h2 id="wizard-title" ref={heading} tabIndex={-1}>Deine Anfrage ist eingegangen.</h2>
-      <p>Bestätige deine Anfrage über den Link in deiner E-Mail. Danach findest du sie in deinem Kundenkonto.</p>
+      <p>{session.native ? 'Du findest deine Anfrage in deinem Kundenkonto.'
+        : 'Bestätige deine Anfrage über den Link in deiner E-Mail. Danach findest du sie in deinem Kundenkonto.'}</p>
       <a className="primary" href={base + '/konto'}>Zu meinem Konto</a>
     </section> : <>
       <p className="wizard-position">Schritt {step + 1} von 3</p>
@@ -261,12 +266,13 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
             </li>)}</ul>}
           </>}
           {step === 2 && <>
-            <p>Du kannst die Anfrage ohne Anmeldung absenden. Zur Bestätigung erhältst du eine E-Mail.</p>
+            <p>{session.native ? 'Verwende ausschließlich Testdaten. Die Anfrage wird deinem Kundenkonto zugeordnet.'
+              : 'Du kannst die Anfrage ohne Anmeldung absenden. Zur Bestätigung erhältst du eine E-Mail.'}</p>
             <label>Vor- und Nachname<input autoComplete="name" value={name} required minLength={2} maxLength={120}
               onChange={event => setName(event.target.value)}/></label>
             <label>Telefonnummer<input autoComplete="tel" type="tel" value={phone} required maxLength={50}
               onChange={event => setPhone(event.target.value)}/></label>
-            <label>E-Mail-Adresse<input autoComplete="email" type="email" value={email} required maxLength={254}
+            <label>E-Mail-Adresse<input autoComplete="email" type="email" value={email} required maxLength={254} readOnly={session.native}
               onChange={event => setEmail(event.target.value)}/></label>
             {privacyNoticeUrl && <p><a href={privacyNoticeUrl} target="_blank" rel="noopener noreferrer">Datenschutzhinweise lesen</a></p>}
             <label className="contact-confirmation"><input type="checkbox" required/>

@@ -19,5 +19,6 @@
     <EmbeddedResource Include="Database/006_request_intake.sql" LogicalName="TaskService.RequestIntake" />
     <EmbeddedResource Include="Database/007_team_access.sql" LogicalName="TaskService.TeamAccess" />
     <EmbeddedResource Include="Database/008_integration_inbox.sql" LogicalName="TaskService.IntegrationInbox" />
+    <EmbeddedResource Include="Database/009_native_accounts.sql" LogicalName="TaskService.NativeIdentity" />
   </ItemGroup>
 </Project>

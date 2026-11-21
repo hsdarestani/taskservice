@@ -27,11 +27,11 @@ public static partial class Endpoints
     {
         if (Operator(http, config) is not { } actor)
             return ApiProblem.Denied();
-        if (string.IsNullOrEmpty(config["Identity:PrivilegedAcr"]) || !Valid(body.Name, 120) || body.Name.Any(char.IsControl) ||
+        if (!IdentitySessions.HasPrivilegedSettings(config) || !Valid(body.Name, 120) || body.Name.Any(char.IsControl) ||
             !Valid(body.Email, 254) || !MailAddress.TryCreate(body.Email, out var address) || address.Address != body.Email)
             return ApiProblem.Error(422, "invalid_invitation", "Bitte prüfen Sie Name und E-Mail-Adresse.");
         if (!Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) || publicBase.Scheme != "https" ||
-            string.IsNullOrWhiteSpace(config["Mail:Host"]))
+            !NativeIdentity.MailHeld(config) && string.IsNullOrWhiteSpace(config["Mail:Host"]))
             return ApiProblem.Error(503, "mail_unavailable", "Einladungen per E-Mail sind derzeit nicht verfügbar.");
         if (!Guid.TryParseExact(http.Request.Headers["Idempotency-Key"], "D", out var key))
             return ApiProblem.Error(400, "invalid_idempotency_key", "Ein gültiger Idempotenzschlüssel ist erforderlich.");
@@ -43,6 +43,8 @@ public static partial class Endpoints
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await Lock(db, $"platform:{slug}", ct);
+        if (NativeIdentity.MailHeld(config))
+            await db.Database.ExecuteSqlRawAsync("SELECT set_config('taskservice.mail_held','on',true)", ct);
         var operation = $"bootstrap:{tenant.Id}";
         var fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(body, Json));
         if (await db.PlatformCommands.FindAsync([actor, operation, key], ct) is { } existing)

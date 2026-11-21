@@ -44,6 +44,9 @@ public sealed class ConversationHub(IServiceScopeFactory scopes) : Hub
     {
         await using var scope = scopes.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ServiceDb>();
+        if (NativeIdentity.Enabled(scope.ServiceProvider.GetRequiredService<IConfiguration>()) &&
+            !await NativeIdentity.IsCurrent(db, http.User, IdentitySessions.IsWorkforce(http.User), ct))
+            throw new HubException("Kein Zugriff auf diesen Chat.");
         var tenant = await Endpoints.FindTenant(db, slug, ct);
         if (tenant is null)
             throw new HubException("Kein Zugriff auf diesen Chat.");

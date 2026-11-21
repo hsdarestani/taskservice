@@ -29,10 +29,31 @@ if (builder.Configuration["DataProtection:KeyDirectory"] is { Length: > 0 } keys
 string Connection(string name) => builder.Configuration.GetConnectionString(name)
     ?? throw new InvalidOperationException($"Missing {name} connection string.");
 
+if (args is ["native-account"])
+{
+    if (string.IsNullOrWhiteSpace(builder.Configuration["DataProtection:KeyDirectory"]))
+        throw new InvalidOperationException("The shared Data Protection key directory is required.");
+    await using var operatorHost = builder.Build();
+    await using var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(Connection("Migration")).Options);
+    try
+    {
+        await NativeAccountOperator.Run(db, operatorHost.Services.GetRequiredService<IDataProtectionProvider>(),
+            Console.In, CancellationToken.None);
+        Console.WriteLine("Account operation completed.");
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Account operation stopped ({error.GetType().Name}).");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args is ["worker"])
 {
     builder.Services.AddDbContext<ServiceDb>(options => options.UseNpgsql(Connection("Worker")));
-    builder.Services.AddHostedService<MailWorker>();
+    if (!NativeIdentity.MailHeld(builder.Configuration))
+        builder.Services.AddHostedService<MailWorker>();
     builder.Services.AddHostedService<ReportWorker>();
     builder.Services.AddSingleton<InvoiceScanner, ClamAvScanner>();
     builder.Services.AddHostedService<InvoiceScanWorker>();
@@ -59,6 +80,9 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = 429;
     options.AddConcurrencyLimiter("invoice-upload", limiter => { limiter.PermitLimit = 3; limiter.QueueLimit = 0; });
+    options.AddPolicy("native-auth", http => RateLimitPartition.GetFixedWindowLimiter(
+        http.Connection.RemoteIpAddress?.ToString() ?? "local",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 16, Window = TimeSpan.FromMinutes(1) }));
     options.AddPolicy("invitations", http => RateLimitPartition.GetFixedWindowLimiter(
         Actor.Subject(http.User) ?? http.Connection.RemoteIpAddress?.ToString() ?? "local",
         _ => new FixedWindowRateLimiterOptions
@@ -84,13 +108,20 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0
         }));
 });
-var identityConfigured = new[] { "Authority", "ClientId", "ClientSecret" }
+var nativeIdentity = NativeIdentity.Enabled(builder.Configuration);
+var identityConfigured = !nativeIdentity && new[] { "Authority", "ClientId", "ClientSecret" }
     .All(key => !string.IsNullOrWhiteSpace(builder.Configuration[$"Identity:{key}"]));
 
 var authentication = builder.Services.AddAuthentication(IdentitySessions.Selector)
     .AddPolicyScheme(IdentitySessions.Selector, "TaskService session", options => options.ForwardDefaultSelector = IdentitySessions.CookieFor)
-    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options => IdentitySessions.ConfigureCookie(options, workforce: false))
-    .AddCookie(IdentitySessions.WorkforceCookie, options => IdentitySessions.ConfigureCookie(options, workforce: true));
+    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options => ConfigureCookie(options, workforce: false))
+    .AddCookie(IdentitySessions.WorkforceCookie, options => ConfigureCookie(options, workforce: true));
+void ConfigureCookie(CookieAuthenticationOptions options, bool workforce)
+{
+    IdentitySessions.ConfigureCookie(options, workforce);
+    if (nativeIdentity)
+        options.Events.OnValidatePrincipal = context => NativeIdentity.ValidateCookie(context, workforce);
+}
 if (identityConfigured)
 {
     authentication.AddOpenIdConnect(OpenIdConnectDefaults.AuthenticationScheme,
@@ -136,22 +167,41 @@ app.MapOpenApi("/api/openapi/{documentName}.json");
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 var enforceRelease = app.Configuration.GetValue<bool>("Operations:RequireProductionReadiness");
 app.MapGet("/health/ready", async (ServiceDb db, IOptionsMonitor<OpenIdConnectOptions> oidc, CancellationToken ct) =>
-    identityConfigured && (enforceRelease ? await ReleaseGate.IsReady(db, app.Configuration, oidc, ct)
+    (nativeIdentity || identityConfigured) && (enforceRelease ? await ReleaseGate.IsReady(db, app.Configuration, oidc, ct)
         : await db.Database.CanConnectAsync(ct))
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(503));
 app.MapGet("/api/v1/session", (HttpContext http, IAntiforgery antiforgery) =>
-    Results.Ok(new { signedIn = Actor.Subject(http.User) is not null, csrfToken = antiforgery.GetAndStoreTokens(http).RequestToken }));
+    Results.Ok(new
+    {
+        signedIn = Actor.Subject(http.User) is not null,
+        csrfToken = antiforgery.GetAndStoreTokens(http).RequestToken,
+        email = nativeIdentity ? http.User.FindFirst("email")?.Value : null,
+        native = nativeIdentity,
+        demo = NativeIdentity.Demo(app.Configuration),
+        mailEnabled = !NativeIdentity.MailHeld(app.Configuration)
+    }));
 app.MapGet("/api/v1/login", (string? returnTo, string? mode) =>
 {
+    if (nativeIdentity)
+        return Results.LocalRedirect("/anmelden?returnTo=" + Uri.EscapeDataString(SafeReturnPath(returnTo)) +
+            (mode == IdentitySessions.WorkforceClaim ? "&mode=workforce" : ""));
     if (!identityConfigured)
         return ApiProblem.Error(503, "identity_unavailable", "Die Anmeldung ist noch nicht konfiguriert.");
     var properties = new AuthenticationProperties { RedirectUri = SafeReturnPath(returnTo) };
     var scheme = mode == IdentitySessions.WorkforceClaim ? IdentitySessions.WorkforceOidc : OpenIdConnectDefaults.AuthenticationScheme;
     return Results.Challenge(properties, [scheme]);
 });
-app.MapPost("/api/v1/logout", (HttpContext http) => Results.SignOut(authenticationSchemes:
-    [IdentitySessions.CookieFor(http)])).AddEndpointFilter<CsrfFilter>();
+app.MapPost("/api/v1/logout", async (HttpContext http, ServiceDb db, CancellationToken ct) =>
+{
+    if (nativeIdentity)
+        await NativeIdentity.RevokeSession(db, http.User, ct);
+    // Cookie sign-out clears the selected realm only.
+    await http.SignOutAsync(IdentitySessions.CookieFor(http));
+    return Results.NoContent();
+}).AddEndpointFilter<CsrfFilter>();
+if (nativeIdentity)
+    app.MapNativeIdentity();
 app.MapTaskService();
 app.MapHub<ConversationHub>("/hubs/conversations", options =>
 {

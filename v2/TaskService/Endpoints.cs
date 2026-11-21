@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Mail;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
@@ -182,11 +183,17 @@ public static partial class Endpoints
             return ApiProblem.Error(503, "intake_unavailable", "Die Anfrage kann derzeit nicht entgegengenommen werden.");
         if (!ValidIntake(body))
             return ApiProblem.Error(422, "invalid_intake_details", "Bitte prüfen Sie Service, Kontaktdaten und die ausgewählten Fotos.");
+        var native = NativeIdentity.Enabled(config);
+        var holdMail = NativeIdentity.MailHeld(config);
         if (!Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) ||
-            publicBase.Scheme != "https" || string.IsNullOrWhiteSpace(config["Mail:Host"]))
+            publicBase.Scheme != "https" || !native && string.IsNullOrWhiteSpace(config["Mail:Host"]))
             return ApiProblem.Error(503, "verification_unavailable", "Die Bestätigung per E-Mail ist derzeit nicht verfügbar.");
         await using var tx = await db.ForTenant(tenant.Id, ct);
         var actor = await Actor.Read(db, tenant, http, ct);
+        if (native && (actor == Actor.Guest || IdentitySessions.IsWorkforce(http.User)))
+            return ApiProblem.Error(401, "account_required", "Melden Sie sich mit Ihrem Kundenkonto an, um eine Demo-Anfrage zu erstellen.");
+        if (native && !string.Equals(mail.Address, http.User.FindFirstValue("email"), StringComparison.OrdinalIgnoreCase))
+            return ApiProblem.Error(422, "account_email_required", "Verwenden Sie die E-Mail-Adresse Ihres Kundenkontos.");
         var key = http.Request.Headers["Idempotency-Key"].ToString();
         if (!Guid.TryParseExact(key, "D", out _))
             return ApiProblem.Error(400, "invalid_idempotency_key", "Ein gültiger Idempotenzschlüssel ist erforderlich.");
@@ -200,19 +207,29 @@ public static partial class Endpoints
         {
             TenantId = tenant.Id, Id = id, Title = body.Title.Trim(), Description = body.Description.Trim(),
             ContactEmail = mail.Address, CreatedAt = DateTimeOffset.UtcNow, ServiceCategory = body.Category,
-            ContactName = body.Name?.Trim(), ContactPhone = body.Phone?.Trim()
+            ContactName = body.Name?.Trim(), ContactPhone = body.Phone?.Trim(),
+            CustomerKey = native ? actor.Key : null, State = native ? "verified" : "received"
         };
         db.Requests.Add(request);
         await db.SaveChangesAsync(ct);
         QueuePhotos(db, request, body.Photos);
-        var token = RandomNumberGenerator.GetBytes(32);
-        db.Claims.Add(new(tenant.Id, id, SHA256.HashData(token), request.CreatedAt.AddHours(24)));
         Workflow.Record(db, request, actor, "request.created");
-        var claim = new Uri(publicBase, $"/unternehmen/{tenant.Slug}/anfragen/{id}/bestaetigen#{Convert.ToHexStringLower(token)}");
-        Workflow.QueueMail(db, tenant.Id, protection, mail.Address, "Bitte bestätigen Sie Ihre Serviceanfrage",
-            $"Melden Sie sich über diesen Link an, um Ihre Anfrage zu bestätigen: {claim}");
+        if (native)
+        {
+            var detail = new Uri(publicBase, $"/unternehmen/{tenant.Slug}/anfragen/{id}");
+            Workflow.QueueMail(db, tenant.Id, protection, mail.Address, "Ihre Serviceanfrage ist eingegangen",
+                $"Den aktuellen Stand sehen Sie in Ihrem Kundenkonto: {detail}", holdMail);
+        }
+        else
+        {
+            var token = RandomNumberGenerator.GetBytes(32);
+            db.Claims.Add(new(tenant.Id, id, SHA256.HashData(token), request.CreatedAt.AddHours(24)));
+            var claim = new Uri(publicBase, $"/unternehmen/{tenant.Slug}/anfragen/{id}/bestaetigen#{Convert.ToHexStringLower(token)}");
+            Workflow.QueueMail(db, tenant.Id, protection, mail.Address, "Bitte bestätigen Sie Ihre Serviceanfrage",
+                $"Melden Sie sich über diesen Link an, um Ihre Anfrage zu bestätigen: {claim}", holdMail);
+        }
         var command = new Command(tenant.Id, actor.Key, operation, key, fingerprint, id,
-            JsonSerializer.Serialize(new { id, status = "received" }, Json),
+            JsonSerializer.Serialize(new { id, status = request.State }, Json),
             $"/api/v1/tenants/{slug}/requests/{id}", 1, 201);
         db.Commands.Add(command);
         await db.SaveChangesAsync(ct);
@@ -223,7 +240,8 @@ public static partial class Endpoints
     private static async Task<IResult> ClaimRequest(ServiceDb db, string slug, Guid id, ClaimBody body,
         HttpContext http, CancellationToken ct)
     {
-        if (await FindTenant(db, slug, ct) is not { } tenant || Actor.Subject(http.User) is not { } key ||
+        if (NativeIdentity.Enabled(http.RequestServices.GetRequiredService<IConfiguration>()) ||
+            await FindTenant(db, slug, ct) is not { } tenant || Actor.Subject(http.User) is not { } key ||
             body.Token is not { Length: 64 } || !body.Token.All(Uri.IsHexDigit))
             return ApiProblem.NotFound();
         await using var tx = await db.ForTenant(tenant.Id, ct);
@@ -363,11 +381,11 @@ public static partial class Endpoints
             (previousCustomerState != Workflow.CustomerState(request.State) || body.Action == "schedule" ||
              body.Action == "arrival" && previousArrival != appointment?.ArrivalStatus) &&
             Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) && publicBase.Scheme == "https" &&
-            !string.IsNullOrWhiteSpace(config["Mail:Host"]))
+            (!string.IsNullOrWhiteSpace(config["Mail:Host"]) || NativeIdentity.MailHeld(config)))
         {
             var link = new Uri(publicBase, $"/unternehmen/{slug}/anfragen/{id}");
             Workflow.QueueMail(db, tenant.Id, protection, request.ContactEmail, "Ihre Serviceanfrage wurde aktualisiert",
-                $"Melden Sie sich an, um die Änderung einzusehen: {link}");
+                $"Melden Sie sich an, um die Änderung einzusehen: {link}", NativeIdentity.MailHeld(config));
         }
         var command = new Command(tenant.Id, actor.Key, operation, key, fingerprint, id,
             JsonSerializer.Serialize(new { id, revision = request.Revision }, Json), null, request.Revision, 200);

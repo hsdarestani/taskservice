@@ -1,6 +1,7 @@
 const route = location.pathname.split('/').filter(Boolean);
 const view = new URLSearchParams(location.search).get('ansicht');
-const workforce = route[0] === 'plattform' || ['betrieb', 'technik', 'einladungen'].includes(route[2]) ||
+const workforce = route[0] === 'anmelden' && new URLSearchParams(location.search).get('mode') === 'workforce' ||
+  route[0] === 'plattform' || ['betrieb', 'technik', 'einladungen'].includes(route[2]) ||
   route[2] === 'anfragen' && (view === 'betrieb' || view === 'technik');
 const sessionHeaders: Record<string, string> = workforce ? { 'X-TaskService-Session': 'workforce' } : {};
 
@@ -8,7 +9,8 @@ export function sessionUrl(url: string): string {
   return workforce ? url + (url.includes('?') ? '&' : '?') + 'session=workforce' : url;
 }
 
-export type Session = { signedIn: boolean; csrfToken: string };
+export type Session = { signedIn: boolean; csrfToken: string; native?: boolean; demo?: boolean;
+  mailEnabled?: boolean; email?: string };
 export type Company = { slug: string; name: string; accent: string; role?: string; privacyNoticeUrl?: string };
 export type AppointmentView = {
   startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;

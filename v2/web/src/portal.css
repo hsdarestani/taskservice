@@ -227,3 +227,19 @@ body:has(.request-dialog[open]) { overflow: hidden; }
 @media (max-width: 940px) { .team-grid { grid-template-columns: 1fr; gap: 10px; } }
 
 .initial-admin { margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--line); }
+
+.demo-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem 1rem;
+  align-items: center;
+  padding: .55rem clamp(1rem, 3vw, 2.5rem);
+  background: #e7efff;
+  color: #132754;
+  font-size: .875rem;
+}
+.demo-bar strong { letter-spacing: .08em; }
+.demo-bar nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-inline-start: auto; }
+.demo-bar nav a { text-decoration: underline; }
+.native-login { max-width: 34rem; margin: 2rem auto; }
+.native-login-links { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }

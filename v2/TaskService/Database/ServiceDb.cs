@@ -54,6 +54,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         ConfigureIntake(model);
         ConfigureTeam(model);
         ConfigureIntegration(model);
+        ConfigureNativeIdentity(model);
         foreach (var entity in model.Model.GetEntityTypes())
         foreach (var property in entity.GetProperties())
             property.SetColumnName(NameBoundary().Replace(property.Name, "_$1").ToLowerInvariant());

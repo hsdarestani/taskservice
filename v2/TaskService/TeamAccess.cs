@@ -73,7 +73,7 @@ public static partial class Endpoints
             !Valid(body.Email, 254) || !MailAddress.TryCreate(body.Email, out var address) || address.Address != body.Email)
             return ApiProblem.Error(422, "invalid_invitation", "Bitte prüfen Sie Name, E-Mail-Adresse und Rolle.");
         if (!Uri.TryCreate(config["PublicBaseUrl"], UriKind.Absolute, out var publicBase) ||
-            publicBase.Scheme != "https" || string.IsNullOrWhiteSpace(config["Mail:Host"]))
+            publicBase.Scheme != "https" || !NativeIdentity.MailHeld(config) && string.IsNullOrWhiteSpace(config["Mail:Host"]))
             return ApiProblem.Error(503, "mail_unavailable", "Einladungen per E-Mail sind derzeit nicht verfügbar.");
 
         var key = http.Request.Headers["Idempotency-Key"].ToString();
@@ -103,7 +103,7 @@ public static partial class Endpoints
         db.MemberInvites.Add(invite);
         var link = new Uri(publicBase, $"/unternehmen/{tenant.Slug}/einladungen/{invite.Id}#{Convert.ToHexStringLower(raw)}");
         Workflow.QueueMail(db, tenant.Id, protection, address.Address, "Einladung zum TaskService-Arbeitsbereich",
-            $"Melden Sie sich mit dem eingeladenen Konto an, um die Einladung anzunehmen: {link}");
+            $"Melden Sie sich mit dem eingeladenen Konto an, um die Einladung anzunehmen: {link}", NativeIdentity.MailHeld(config));
         db.Audit.Add(new(tenant.Id, Guid.NewGuid(), actor.Key, operation, invite.Id, now));
         var command = new Command(tenant.Id, actor.Key, operation, key, fingerprint, invite.Id,
             JsonSerializer.Serialize(new { invite.Id, invite.ExpiresAt }, Json), null, null, 201);
@@ -137,8 +137,9 @@ public static partial class Endpoints
         CancellationToken ct)
     {
         var email = http.User.FindFirstValue("email");
+        var config = http.RequestServices.GetRequiredService<IConfiguration>();
         if (!IdentitySessions.IsWorkforce(http.User) || Actor.Subject(http.User) is not { } actorKey || email is not { Length: > 0 and <= 254 } ||
-            !bool.TryParse(http.User.FindFirstValue("email_verified"), out var verified) || !verified ||
+            !NativeIdentity.Enabled(config) && (!bool.TryParse(http.User.FindFirstValue("email_verified"), out var verified) || !verified) ||
             body.Token is not { Length: 64 } || !body.Token.All(Uri.IsHexDigit) ||
             await FindTenant(db, slug, ct) is not { } tenant)
             return ApiProblem.NotFound();
@@ -152,8 +153,7 @@ public static partial class Endpoints
             return ApiProblem.NotFound();
         if (invite.Role == "admin")
         {
-            var requiredAcr = http.RequestServices.GetRequiredService<IConfiguration>()["Identity:PrivilegedAcr"];
-            if (string.IsNullOrEmpty(requiredAcr) || http.User.FindFirstValue(IdentitySessions.AssuranceClaim) != requiredAcr)
+            if (!IdentitySessions.HasPrivilegedAssurance(http.User, config))
                 return ApiProblem.Error(403, "assurance_required", "Bestätigen Sie die Anmeldung mit dem zweiten Faktor.");
             if (await db.Members.AnyAsync(x => x.TenantId == tenant.Id && x.Role == "admin" && x.Active, ct))
                 return ApiProblem.Error(409, "admin_exists", "Das Unternehmen verfügt bereits über eine Administration.");

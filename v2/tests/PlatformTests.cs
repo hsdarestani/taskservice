@@ -349,6 +349,87 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public async Task NativeDemoProtectsOwnershipSessionsAndPrivilegedTotp()
+    {
+        const string password = "TaskService-Test-Only-28!";
+        const string email = "demo-owner@example.invalid";
+        const string platformEmail = "demo-platform@example.invalid";
+        var secret = RandomNumberGenerator.GetBytes(20);
+        using var environment = new TestEnvironment(new()
+        {
+            ["Identity__Mode"] = "native", ["Demo__Enabled"] = "true",
+            ["Mail__DeliveryMode"] = "disabled"
+        });
+        await using var host = lab.IsolatedHost().WithWebHostBuilder(web => web.ConfigureServices(services =>
+            services.PostConfigure<AuthenticationOptions>(o => o.DefaultAuthenticateScheme = IdentitySessions.Selector)));
+        using var browser = Client();
+        using var stranger = Client();
+        using var staff = Client();
+        staff.DefaultRequestHeaders.Add(IdentitySessions.ScopeHeader, IdentitySessions.WorkforceClaim);
+        await lab.OperateNativeAccount(host.Services, new
+        {
+            action = "provision", email = platformEmail, password, role = "platform",
+            totpSecretHex = Convert.ToHexString(secret)
+        });
+
+        var loginRoute = await browser.GetAsync("/api/v1/login?returnTo=%2Funternehmen%2Flab%2Fkonto");
+        Assert.Equal(HttpStatusCode.Redirect, loginRoute.StatusCode);
+        Assert.StartsWith("/anmelden?", loginRoute.Headers.Location!.OriginalString);
+        var recovery = await browser.GetFromJsonAsync<JsonElement>("/api/v1/auth/recovery");
+        Assert.Equal("Diese Funktion ist in der Demoversion noch nicht verfügbar.", recovery.GetProperty("message").GetString());
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await browser.PostAsJsonAsync("/api/v1/auth/register",
+            new { email, password })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(browser, "/api/v1/auth/register",
+            new { email, password, workforce = true, role = "platform_admin" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await lab.Post(staff, "/api/v1/auth/login",
+            new { email, password, workforce = true })).StatusCode);
+        var sessionResponse = await lab.Post(browser, "/api/v1/auth/login", new { email, password });
+        Assert.Equal(HttpStatusCode.NoContent, sessionResponse.StatusCode);
+        var cookie = sessionResponse.Headers.GetValues("Set-Cookie").Single(x => x.StartsWith("__Host-taskservice="));
+        Assert.Contains("expires=", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await lab.Submit(browser, "Falsche Adresse")).StatusCode);
+
+        var created = await lab.Post(browser, lab.Base() + "/requests",
+            new { title = "Synthetische Demo-Anfrage", description = "Fiktionale Daten für den Test", email });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(lab.Request(id))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await browser.GetAsync(lab.Request(id, "other"))).StatusCode);
+
+        var second = new { email = "demo-stranger@example.invalid", password };
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(stranger, "/api/v1/auth/register", second)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(stranger, "/api/v1/auth/login", second)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.GetAsync(lab.Request(id))).StatusCode);
+        Assert.Equal(1L, await lab.DemoHeldMail(lab.TenantA));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await lab.Post(staff, "/api/v1/auth/login",
+            new { email = platformEmail, password, workforce = true })).StatusCode);
+        var code = NativeIdentity.CodeAt(secret, DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30);
+        var privileged = new { email = platformEmail, password, workforce = true, code };
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(staff, "/api/v1/auth/login", privileged)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await staff.GetAsync("/api/v1/platform/overview")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await lab.Post(staff, "/api/v1/auth/login", privileged)).StatusCode);
+
+        using var replay = host.CreateClient(new() { BaseAddress = new Uri("https://localhost"),
+            AllowAutoRedirect = false, HandleCookies = false });
+        replay.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", cookie.Split(';')[0]);
+        Assert.Equal(HttpStatusCode.OK, (await replay.GetAsync(lab.Request(id))).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await lab.Post(browser, "/api/v1/logout", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await replay.GetAsync(lab.Request(id))).StatusCode);
+        await lab.OperateNativeAccount(host.Services, new
+        {
+            action = "recover", email = platformEmail, password = "TaskService-Recovery-Test-29!"
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.GetAsync("/api/v1/platform/overview")).StatusCode);
+        return;
+
+        HttpClient Client() => host.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+    }
+
+    [Fact]
     public async Task SignedIntegrationInboxVerifiesRawBytesRotationTenantAndRevision()
     {
         var connection = Guid.NewGuid();
@@ -1040,6 +1121,22 @@ public sealed class Lab : IAsyncLifetime
         request.Headers.Add("Idempotency-Key", key ?? Guid.NewGuid().ToString());
         request.Headers.TryAddWithoutValidation("If-Match", $"\"r{revision}\"");
         return await client.SendAsync(request);
+    }
+
+    public async Task OperateNativeAccount(IServiceProvider services, object command)
+    {
+        await using var db = new ServiceDb(new DbContextOptionsBuilder<ServiceDb>().UseNpgsql(admin).Options);
+        await NativeAccountOperator.Run(db, services.GetRequiredService<IDataProtectionProvider>(),
+            new StringReader(JsonSerializer.Serialize(command)), CancellationToken.None);
+    }
+
+    public async Task<long> DemoHeldMail(Guid tenant)
+    {
+        await using var cn = new NpgsqlConnection(admin);
+        await cn.OpenAsync();
+        await using var command = new NpgsqlCommand("SELECT count(*) FROM ts.outbox WHERE tenant_id=$1 AND kind='mail_held'", cn);
+        command.Parameters.Add(new NpgsqlParameter { Value = tenant });
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 
     public async Task<long> VisibleInvoiceFiles(Guid tenant)

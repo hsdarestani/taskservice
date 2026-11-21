@@ -26,12 +26,15 @@ public static class IdentitySessions
     public static bool IsWorkforce(ClaimsPrincipal principal) => principal.FindFirstValue("ts:realm") == WorkforceClaim;
 
     public static bool HasPrivilegedSettings(IConfiguration config) =>
-        !string.IsNullOrWhiteSpace(config["Identity:PrivilegedAcr"]) || config["Identity:PrivilegedAmr"] == "mfa";
+        NativeIdentity.Enabled(config) || !string.IsNullOrWhiteSpace(config["Identity:PrivilegedAcr"]) || config["Identity:PrivilegedAmr"] == "mfa";
 
     public static bool HasPrivilegedAssurance(ClaimsPrincipal principal, IConfiguration config)
     {
         if (!IsWorkforce(principal) || !HasPrivilegedSettings(config))
             return false;
+        if (NativeIdentity.Enabled(config))
+            return principal.FindFirstValue("ts:issuer") == NativeIdentity.Issuer &&
+                   principal.FindFirstValue(AssuranceClaim) == NativeIdentity.MfaAssurance;
         return (config["Identity:PrivilegedAcr"] is not { Length: > 0 } acr ||
                 principal.FindFirstValue(AssuranceClaim) == acr) &&
             (config["Identity:PrivilegedAmr"] != "mfa" || principal.HasClaim(AuthenticationMethodClaim, "mfa"));

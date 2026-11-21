@@ -8,6 +8,7 @@ import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, Mess
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
+import { NativeLogin } from './NativeLogin';
 import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
 import './portal.css';
@@ -74,7 +75,22 @@ function App() {
     try { await send('/api/v1/logout', {}, session.data!.csrfToken); location.assign(base || '/'); }
     catch { location.reload(); }
   }
-  if (atCustomerHome && company.data) return <>
+  const demoBanner = session.data.demo && <aside className="demo-bar" aria-label="Demoversion">
+    <strong>DEMO</strong> Bitte nur Testdaten eingeben.
+    {session.data.mailEnabled === false && ' E-Mail-Versand ist deaktiviert.'}
+    {base && <nav aria-label="Demo-Bereiche"><a href={base + '/betrieb'}>Betrieb</a>
+      <a href={base + '/technik'}>Technik</a><a href="/plattform">Plattform</a></nav>}
+  </aside>;
+  if (path[0] === 'anmelden' && session.data.native) return <>{demoBanner}
+    <header className="bar"><Wordmark href="/"/></header>
+    <main id="inhalt" className="account-main"><NativeLogin session={session.data}/></main></>;
+  if (path[0] === 'demo-datenschutz' && session.data.demo) return <>{demoBanner}
+    <header className="bar"><Wordmark href="/"/></header>
+    <main id="inhalt" className="account-main"><Panel><h1>Datenschutzhinweis zur Demo</h1>
+      <p>Verwende ausschließlich Testdaten. Gib keine echten Kundendaten, vertraulichen Informationen oder privaten Dokumente ein.</p>
+      <p>Die Demo speichert die Anmeldedaten deines Testkontos, geschützte Sitzungsschlüssel sowie die von dir erstellten Testanfragen.</p>
+    </Panel></main></>;
+  if (atCustomerHome && company.data) return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
     <CustomerHome base={base} api={api} company={company.data} session={session.data}
       categories={catalog.data} catalogError={catalog.error}/>
@@ -90,7 +106,7 @@ function App() {
       : company.data ? <Account session={session.data} loginLink={loginLink} logout={logout}/>
       : <Panel><h1>Ihr Kontakt zum Servicebetrieb</h1><p>Öffnen Sie das Portal Ihres Servicebetriebs über dessen persönlichen Link.</p></Panel>;
 
-  return <>
+  return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
     {portal === 'customer' ? <div className="consumer-account">
       {company.data ? <CustomerHeader base={base} company={company.data}/> : <header className="bar"><Wordmark href="/"/></header>}

@@ -14,11 +14,14 @@ public static class ReleaseGate
     public static bool HasSettings(IConfiguration config) =>
         PrivacyNotice(config) is not null &&
         HttpsUrl(config["PublicBaseUrl"]) is { AbsolutePath: "/", Query.Length: 0, Fragment.Length: 0 } &&
-        HttpsUrl(config["Identity:Authority"]) is not null &&
+        (NativeIdentity.Enabled(config) ? NativeIdentity.Demo(config) &&
+            !string.IsNullOrWhiteSpace(config["DataProtection:KeyDirectory"]) && ProxyTrust.Options(config) is not null
+            : HttpsUrl(config["Identity:Authority"]) is not null) &&
         IdentitySessions.HasPrivilegedSettings(config) &&
         !string.IsNullOrWhiteSpace(config.GetConnectionString("Platform")) &&
         config["Routing:DefaultTenantSlug"] is { Length: > 0 and <= 63 } &&
-        !string.IsNullOrWhiteSpace(config["Mail:Host"]) && MailAddress.TryCreate(config["Mail:From"], out _) &&
+        (NativeIdentity.Enabled(config) && NativeIdentity.Demo(config) && NativeIdentity.MailHeld(config) ||
+         !string.IsNullOrWhiteSpace(config["Mail:Host"]) && MailAddress.TryCreate(config["Mail:From"], out _)) &&
         !string.IsNullOrWhiteSpace(config["ClamAv:Host"]);
 
     private static Uri? HttpsUrl(string? value) =>
@@ -40,11 +43,19 @@ public static class ReleaseGate
             if (!await db.Tenants.AnyAsync(t => t.Active && t.Slug == slug, token))
                 return false;
 
-            var identities = await oidc.Get(OpenIdConnectDefaults.AuthenticationScheme).ConfigurationManager!
-                .GetConfigurationAsync(token).WaitAsync(token);
-            if (HttpsUrl(identities.AuthorizationEndpoint) is null || HttpsUrl(identities.TokenEndpoint) is null ||
-                identities.SigningKeys.Count == 0)
-                return false;
+            if (NativeIdentity.Enabled(config))
+            {
+                if (!await db.NativeAccounts.AnyAsync(a => a.Workforce && a.PlatformAdmin && a.TotpCipher != null, token))
+                    return false;
+            }
+            else
+            {
+                var identities = await oidc.Get(OpenIdConnectDefaults.AuthenticationScheme).ConfigurationManager!
+                    .GetConfigurationAsync(token).WaitAsync(token);
+                if (HttpsUrl(identities.AuthorizationEndpoint) is null || HttpsUrl(identities.TokenEndpoint) is null ||
+                    identities.SigningKeys.Count == 0)
+                    return false;
+            }
 
             using var scanner = new TcpClient();
             await scanner.ConnectAsync(config["ClamAv:Host"]!, config.GetValue("ClamAv:Port", 3310), token);

@@ -1,0 +1,68 @@
+name: TaskService low-memory ClamAV scanner benchmark
+on:
+  push:
+    branches: [codex/taskservice-v2-core]
+    paths:
+      - 'v2/ops/clamd.conf'
+      - '.github/workflows/taskservice-low-memory-scanner-benchmark.yml'
+permissions:
+  contents: read
+jobs:
+  scan-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        memory_mib: [1344, 1792]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated scanner image on CI runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull clamav/clamav:stable
+          image="$(docker image inspect clamav/clamav:stable -f '{{index .RepoDigests 0}}')"
+          echo "Scanner image digest: $image"
+          docker run -d --name scanner-test \
+            --memory=${{ matrix.memory_mib }}m --memory-swap=${{ matrix.memory_mib }}m \
+            --cpus=0.75 --pids-limit=100 \
+            -v "$PWD/v2/ops/clamd.conf:/etc/clamav/clamd.conf:ro" \
+            clamav/clamav:stable
+      - name: Test scanner readiness and memory budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 60); do
+            alive="$(docker inspect scanner-test --format '{{.State.Running}}')"
+            if [ "$alive" != true ]; then
+              echo "Scanner container exited before readiness"
+              break
+            fi
+            current="$(docker stats --no-stream --format '{{.MemUsage}}' scanner-test | cut -d/ -f1)"
+            echo "time_$((i*5))s_memory=$current"
+            if docker exec scanner-test sh -c 'printf "PING\n" | nc -w 3 127.0.0.1 3310' 2>/dev/null | grep -q PONG; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+          echo "MEMORY_BUDGET=${{ matrix.memory_mib }}MiB"
+          echo "SCANNER_READY=$ready"
+          if [ "$ready" -eq 1 ]; then
+            docker exec scanner-test sh -c 'printf "This is a harmless text file\n" > /tmp/clean.txt'
+            set +e
+            scan="$(docker exec scanner-test clamdscan /tmp/clean.txt 2>&1)"
+            result="$?"
+            set -e
+            echo "$scan"
+            echo "CLEAN_FILE_EXIT_CODE=$result"
+            [ "$result" -eq 0 ] || ready=0
+          fi
+          echo "OOM_KILLED=$(docker inspect -f '{{.State.OOMKilled}}' scanner-test)"
+          docker logs scanner-test --tail 25 2>&1 | sed -E 's/(token|secret|password)=([^ ]+)/\1=[REDACTED]/gi'
+          [ "$ready" -eq 1 ] || exit 1
+      - name: Clean up scanner resources
+        if: always()
+        run: docker rm -f scanner-test >/dev/null 2>&1 || true

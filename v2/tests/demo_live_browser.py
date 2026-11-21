@@ -170,7 +170,9 @@ def main():
 
         action(company, "triage")
         action(company, "assign", technicianId=worker["id"])
-        start = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2)
+        # Separate smoke-test bookings so repeated runs do not conflict.
+        start = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0) + dt.timedelta(
+            hours=48 + int(nonce, 16) % (24 * 90))
         action(company, "schedule", startsAt=start.isoformat(), endsAt=(start + dt.timedelta(hours=1)).isoformat())
         action(customer, "confirm_appointment", is_staff=False)
         action(technician, "arrival", arrivalStatus="arrived")

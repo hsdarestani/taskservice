@@ -36,7 +36,7 @@ jobs:
             echo "ConnectionStrings__Platform=Host=db;Database=taskservice;Username=taskservice_platform;Password=$TASKSERVICE_PLATFORM_PASSWORD"
             printf '%s\n' 'AllowedHosts=localhost' 'TASKSERVICE_HEALTH_HOST=localhost' 'Routing__DefaultTenantSlug=memory-fixture'
           } > secrets/api.env
-          echo "ConnectionStrings__Worker=Host=db;Database=taskservice;Username=taskservice_worker;Password=$TASKSERVICE_WORKER_PASSWORD" > secrets/worker.env
+          { echo "ConnectionStrings__Worker=Host=db;Database=taskservice;Username=taskservice_worker;Password=$TASKSERVICE_WORKER_PASSWORD"; printf "%s\n" "Mail__Host=localhost" "Mail__From=ci@example.invalid"; } > secrets/worker.env
           chmod 600 .env secrets/*.env
           docker pull clamav/clamav:stable
           docker create --name scanner-config-source clamav/clamav:stable >/dev/null

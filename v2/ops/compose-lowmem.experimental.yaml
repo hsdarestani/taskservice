@@ -1,0 +1,38 @@
+# EXPERIMENTAL ONLY: apply after full-stack memory benchmarks and an approved host admission gate.
+# docker compose -f compose.yaml -f compose-lowmem.experimental.yaml config
+# All containers must be placed beneath a real, preconfigured taskservice.slice
+# with an aggregate memory.max. Individual limits alone do not protect Publisher.
+services:
+  db:
+    cgroup_parent: taskservice.slice
+    mem_limit: 320m
+    cpus: 0.45
+    command: [postgres, -c, shared_buffers=64MB, -c, max_connections=24, -c, work_mem=2MB]
+  api:
+    cgroup_parent: taskservice.slice
+    mem_limit: 256m
+    cpus: 0.50
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DOTNET_gcServer: '0'
+  worker:
+    cgroup_parent: taskservice.slice
+    mem_limit: 256m
+    cpus: 0.50
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DOTNET_gcServer: '0'
+  migrate:
+    cgroup_parent: taskservice.slice
+    mem_limit: 256m
+    cpus: 0.50
+  scanner:
+    cgroup_parent: taskservice.slice
+    mem_limit: 1344m
+    cpus: 0.75
+    healthcheck:
+      test: [CMD-SHELL, 'printf "PING\n" | nc -w 4 127.0.0.1 3310 | grep -qx PONG']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s

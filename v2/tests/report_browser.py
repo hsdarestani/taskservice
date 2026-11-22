@@ -52,11 +52,17 @@ with sync_playwright() as playwright:
         platform_page.set_viewport_size({"width": width, "height": height})
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
         platform_page.screenshot(path=output / f"platform-companies-{width}.png")
-        platform_page.get_by_role("link", name="Übersicht", exact=True).click()
+        if width <= 800:
+            platform_page.get_by_label("Bereich auswählen").select_option("overview")
+        else:
+            platform_page.get_by_role("link", name="Übersicht", exact=True).click()
         expect(platform_page.get_by_role("heading", name="Plattformübersicht")).to_be_visible()
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
         platform_page.screenshot(path=output / f"platform-dashboard-{width}.png")
-        platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
+        if width <= 800:
+            platform_page.get_by_label("Bereich auswählen").select_option("companies")
+        else:
+            platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
         expect(platform_page.get_by_role("heading", name="Unternehmen", exact=True).first).to_be_visible()
     platform.close()
 

@@ -33,8 +33,14 @@ public static class IdentitySessions
         if (!IsWorkforce(principal) || !HasPrivilegedSettings(config))
             return false;
         if (NativeIdentity.Enabled(config))
-            return principal.FindFirstValue("ts:issuer") == NativeIdentity.Issuer &&
-                   principal.FindFirstValue(AssuranceClaim) == NativeIdentity.MfaAssurance;
+        {
+            if (principal.FindFirstValue("ts:issuer") != NativeIdentity.Issuer)
+                return false;
+            var assurance = principal.FindFirstValue(AssuranceClaim);
+            return assurance == NativeIdentity.MfaAssurance ||
+                assurance == NativeIdentity.DemoPasswordOnlyAssurance &&
+                NativeIdentity.DemoPasswordOnly(config, principal.FindFirstValue("email"));
+        }
         return (config["Identity:PrivilegedAcr"] is not { Length: > 0 } acr ||
                 principal.FindFirstValue(AssuranceClaim) == acr) &&
             (config["Identity:PrivilegedAmr"] != "mfa" || principal.HasClaim(AuthenticationMethodClaim, "mfa"));

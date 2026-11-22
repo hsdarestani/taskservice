@@ -216,6 +216,7 @@ const platformAction: Record<string, string> = {
 
 function Platform({ session }: { session: Session }) {
   const section = useContext(WorkspaceSectionContext);
+  const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [cursor, setCursor] = useState('');
   const [auditCursor, setAuditCursor] = useState<{ id: string; before: string }>();
@@ -268,7 +269,11 @@ function Platform({ session }: { session: Session }) {
           </div>
           {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
           <div className="report-history company-directory">{overview.data.items.map(item =>
-            <details key={item.slug} className="company-record">
+            <details key={item.slug} className="company-record" open={expandedCompany === item.slug}
+              onToggle={event => {
+                const opened = event.currentTarget.open;
+                setExpandedCompany(current => opened ? item.slug : current === item.slug ? null : current);
+              }}>
               <summary><span className="company-avatar" aria-hidden>{item.name.slice(0, 1).toUpperCase()}</span>
                 <span className="company-record-info"><strong>{item.name}</strong>
                   <small>/unternehmen/{item.slug}</small></span>

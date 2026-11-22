@@ -540,7 +540,7 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
     { id: 'overview', label: 'Überblick', icon: ClipboardList },
     ...(row.actions.length > 0 ? [{ id: 'actions' as const, label: 'Bearbeiten', icon: Activity }] : []),
     { id: 'report', label: 'Arbeitsbericht', icon: FileText },
-    { id: 'invoices', label: 'Rechnungen', icon: Receipt },
+    ...(portal !== 'technician' ? [{ id: 'invoices' as const, label: 'Rechnungen', icon: Receipt }] : []),
     { id: 'messages', label: 'Nachrichten', icon: MessagesSquare },
     ...(row.canReadInternal ? [{ id: 'internal' as const, label: 'Interne Notizen', icon: ShieldCheck }] : []),
     { id: 'timeline', label: 'Verlauf', icon: History },

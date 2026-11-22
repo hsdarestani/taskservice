@@ -65,6 +65,13 @@ export type InvoiceItem = InvoiceVersion & {
   actions: string[];
 };
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function uploadInvoice(url: string, file: File, csrfToken: string, invoice?: InvoiceItem) {
   const target = url + '/upload' + (invoice ? '?invoiceId=' + encodeURIComponent(invoice.id) : '');
   return parse(await fetch(target, {
@@ -99,6 +106,6 @@ export async function send<T>(url: string, body: unknown, csrfToken: string, key
 async function parse<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
   const json = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(json.detail || 'Die Anfrage konnte nicht verarbeitet werden.');
+  if (!response.ok) throw new ApiError(json.detail || 'Die Anfrage konnte nicht verarbeitet werden.', response.status, json.code);
   return json as T;
 }

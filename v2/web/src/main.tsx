@@ -69,7 +69,7 @@ function App() {
     : 'customer';
   const atCustomerHome = portal === 'customer' && !path[2] && Boolean(slug);
   const workspaceAccess = resolveWorkspaceAccess(portal, !!session.data?.signedIn, role,
-    { ready: !!platformProbe.data, error: platformProbe.error });
+    { ready: !!platformProbe.data, error: platformProbe.error, status: platformProbe.status });
   const catalog = useLoad<ServiceCategory[]>(atCustomerHome ? api + '/catalog' : undefined);
   useEffect(() => {
     const accent = company.data?.accent;
@@ -97,8 +97,7 @@ function App() {
       <p>Die Demo speichert die Anmeldedaten deines Testkontos, geschützte Sitzungsschlüssel sowie die von dir erstellten Testanfragen.</p>
     </Panel></main></>;
   if (portal !== 'customer' && workspaceAccess !== 'allowed') return <>{demoBanner}
-    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name}
-      detail={workspaceAccess === 'denied' && platformProbe.error !== 'Zugriff verweigert.' ? platformProbe.error : undefined}/>
+    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name} accountEmail={session.data.email}/>
   </>;
   if (atCustomerHome && company.data) return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
@@ -140,22 +139,28 @@ const workspaceMenus = {
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
 };
 
-function WorkspaceGate({ portal, access, companyName, detail }: {
-  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied'; companyName?: string; detail?: string;
+function WorkspaceGate({ portal, access, companyName, accountEmail }: {
+  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied' | 'unavailable'; companyName?: string; accountEmail?: string;
 }) {
   const heading = access === 'sign-in' ? 'Im Arbeitsbereich anmelden'
-    : access === 'checking' ? 'Zugriff wird geprüft' : 'Kein Zugriff auf diesen Bereich';
-  const destination = access === 'sign-in' ? login + '&mode=workforce' : (base || '/');
+    : access === 'checking' ? 'Zugriff wird geprüft'
+    : access === 'unavailable' ? 'Zugriff konnte nicht geprüft werden'
+    : 'Kein Zugriff auf diesen Bereich';
+  const destination = '/anmelden?mode=workforce&returnTo=' + encodeURIComponent(location.pathname);
   const message = access === 'sign-in' ? 'Melde dich mit deinem Arbeitskonto an, um den Bereich zu öffnen.'
     : access === 'checking' ? 'Deine Berechtigungen werden sicher überprüft.'
-    : 'Dein Konto hat für diesen Arbeitsbereich keine Berechtigung.';
+    : access === 'unavailable' ? 'Die Berechtigungsprüfung ist derzeit nicht erreichbar. Dies bedeutet nicht, dass dein Konto gesperrt ist.'
+    : 'Die aktuelle Anmeldung hat keine Berechtigung für diesen Arbeitsbereich. Melde dich bei Bedarf mit dem richtigen Arbeitskonto an.';
   return <div className="workspace-gate">
     <header className="workspace-gate-top"><Wordmark href={base || '/'}/><span>{companyName || workspaceLabels[portal]}</span></header>
     <main id="inhalt" className="workspace-gate-main"><div className="workspace-gate-card">
       <div className="workspace-gate-icon"><LockKeyhole size={25} aria-hidden/></div>
       <p className="eyebrow">Sicherer Arbeitsbereich</p><h1>{heading}</h1><p>{message}</p>
-      {access === 'denied' && detail && !detail.toLowerCase().includes('forbidden') && <p className="muted">Der Zugriff konnte nicht bestätigt werden.</p>}
-      {access !== 'checking' && <a className="primary" href={destination}>{access === 'sign-in' ? 'Zur Anmeldung' : 'Zum Serviceportal'}</a>}
+      {access === 'denied' && accountEmail && <p className="muted">Aktuelles Arbeitskonto: <strong>{accountEmail}</strong></p>}
+      {(access === 'sign-in' || access === 'denied') && <a className="primary" href={destination}>
+        {access === 'sign-in' ? 'Zur Anmeldung' : 'Anderes Arbeitskonto verwenden'}</a>}
+      {access === 'unavailable' && <button className="primary" type="button" onClick={() => location.reload()}>
+        Erneut versuchen</button>}
     </div></main>
   </div>;
 }

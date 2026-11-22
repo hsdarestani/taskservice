@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resolveWorkspaceAccess, navigationForRole } from '../src/workspaceAccess.ts';
 
 const hasPlatform = { ready: true };
-const noPlatform = { ready: false, error: 'Zugriff verweigert.' };
+const noPlatform = { ready: false, error: 'Zugriff verweigert.', status: 403 };
 const loadingPlatform = { ready: false };
 
 test('all unauthenticated staff routes are gated without privileged navigation', () => {
@@ -16,6 +16,9 @@ test('all unauthenticated staff routes are gated without privileged navigation',
 test('platform requires API-confirmed authorization, not just a signed-in cookie', () => {
   assert.equal(resolveWorkspaceAccess('platform', true, 'admin', noPlatform), 'denied');
   assert.equal(resolveWorkspaceAccess('platform', true, undefined, loadingPlatform), 'checking');
+  assert.equal(resolveWorkspaceAccess('platform', true, undefined, { ready: false, error: 'Datenbank nicht erreichbar', status: 503 }), 'unavailable');
+  assert.equal(resolveWorkspaceAccess('platform', true, undefined, { ready: false, error: 'Netzwerkfehler' }), 'unavailable');
+  assert.equal(resolveWorkspaceAccess('platform', true, undefined, { ready: false, error: 'Bitte anmelden', status: 401 }), 'denied');
   assert.equal(resolveWorkspaceAccess('platform', true, undefined, hasPlatform), 'allowed');
 });
 

@@ -380,16 +380,20 @@ function Account({ session, loginLink, logout }: { session: Session; loginLink: 
 }
 
 function Dashboard({ company, session, portal }: { company: Company; session: Session; portal: 'company' | 'technician' }) {
+  const section = useContext(WorkspaceSectionContext);
   const isCompany = portal === 'company';
+  const showRequests = section === 'requests' || (isCompany && section === 'overview');
+  const showSchedule = !isCompany && section === 'schedule';
+  const showMetrics = (isCompany && section === 'overview') || (!isCompany && section === 'requests');
   const allowed = isCompany ? company.role === 'admin' || company.role === 'dispatcher' : company.role === 'technician';
   const [cursor, setCursor] = useState('');
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState(isCompany ? 'recent' : 'appointment');
-  const list = useLoad<RequestPage>(session.signedIn && allowed ? api + '/requests?view=staff'
+  const list = useLoad<RequestPage>(session.signedIn && allowed && (showRequests || showSchedule) ? api + '/requests?view=staff'
     + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') + (query ? '&q=' + encodeURIComponent(query) : '') : undefined);
-  const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany ? api + '/technicians' : undefined);
+  const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany && section === 'technicians' ? api + '/technicians' : undefined);
   const result = list.data?.items ?? [];
   const today = berlinDay(new Date());
   const daily = result.filter(row => row.appointment && berlinDay(row.appointment.startsAt) === today)
@@ -404,21 +408,26 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
     <a href={login + '&mode=workforce'} className="primary">Anmelden</a></Panel>;
   if (!allowed) return <Panel><h1>Zugang zum Arbeitsbereich</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
   return <>
-    <div id="overview" className="workspace-heading"><p className="eyebrow">{company.name}</p>
-      <h1>{isCompany ? 'Serviceübersicht' : 'Meine Einsätze'}</h1>
-      <p>{isCompany ? 'Anfragen, Disposition und Kommunikation an einem Ort.' : 'Dein Tagesplan, deine Aufträge und Nachrichten.'}</p>
+    <div className="workspace-heading"><p className="eyebrow">{company.name}</p>
+      <h1>{isCompany ? ({
+        overview: 'Serviceübersicht', requests: 'Servicevorgänge', technicians: 'Techniker',
+        team: 'Team und Rechte', integrations: 'Integrationen', conversations: 'Unternehmenschat',
+      } as Record<string,string>)[section] || 'Servicebetrieb'
+        : ({ requests: 'Meine Einsätze', schedule: 'Tagesplan', conversations: 'Teamchat' } as Record<string,string>)[section] || 'Technik'}</h1>
+      <p>{isCompany ? 'Servicevorgänge, Disposition und Teamarbeit — klar organisiert.'
+        : 'Deine Einsätze, Termine und Nachrichten an einem Ort.'}</p>
     </div>
-    {list.data && <div className="workspace-metrics" aria-label="Vorgänge in dieser Ansicht">
+    {showMetrics && list.data && <div className="workspace-metrics" aria-label="Vorgänge in dieser Ansicht">
       <div><ClipboardList aria-hidden/><span>{isCompany ? 'Vorgänge' : 'Zugewiesene Einsätze'}</span><strong>{result.length}</strong></div>
       <div><CalendarDays aria-hidden/><span>Heute geplant</span><strong>{daily.length}</strong></div>
       <div><Activity aria-hidden/><span>In Arbeit</span><strong>{result.filter(r => r.state === 'in_progress').length}</strong></div>
     </div>}
-    {!isCompany && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
+    {showSchedule && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
       {daily.length === 0 && <p className="muted">Heute sind in dieser Ansicht keine Termine geplant.</p>}
       <ol>{daily.map(row => <li key={row.id}><time dateTime={row.appointment!.startsAt}>{berlinTime(row.appointment!.startsAt)}</time>
         <a href={detailPath(row)}>{row.title}<small>Bis {berlinTime(row.appointment!.endsAt)} Uhr</small></a></li>)}</ol>
     </section>}
-    <section id="requests" className="panel operations-list">
+    {showRequests && <section id="requests" className="panel operations-list">
       <div className="section-line"><h2>{isCompany ? 'Servicevorgänge' : 'Zugewiesene Aufträge'}</h2></div>
       <form className="workspace-filters" onSubmit={e => {e.preventDefault(); setCursor(''); setFilter(''); setQuery(search.trim());}}>
         <label>Vorgang suchen<input type="search" value={search} maxLength={160} placeholder="Titel eingeben" onChange={e => {
@@ -446,14 +455,15 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       </li>)}</ul>}
       {list.data?.nextCursor && <button onClick={() => setCursor(list.data!.nextCursor!)}>Weitere Vorgänge</button>}
       {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-    </section>
-    {isCompany && <section id="technicians" className="panel"><h2>Techniker</h2><Notice text={technicians.error}/>
+    </section>}
+    {isCompany && section === 'technicians' && <section id="technicians" className="panel"><h2>Techniker</h2><Notice text={technicians.error}/>
       {!technicians.data && !technicians.error && <p role="status">Techniker werden geladen …</p>}
       {technicians.data?.length === 0 && <p className="muted">Aktuell sind keine Techniker zuweisbar.</p>}
       {technicians.data && <ul className="staff-directory">{technicians.data.map(tech => <li key={tech.id}><UserRound aria-hidden/>{tech.name}</li>)}</ul>}
     </section>}
-    {isCompany && company.role === 'admin' && <><Team api={api} session={session}/><IntegrationInbox/></>}
-    <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>
+    {isCompany && company.role === 'admin' && section === 'team' && <Team api={api} session={session}/>}
+    {isCompany && company.role === 'admin' && section === 'integrations' && <IntegrationInbox/>}
+    {section === 'conversations' && <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>}
   </>;
 }
 

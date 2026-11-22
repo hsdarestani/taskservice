@@ -1,0 +1,67 @@
+name: TaskService low-memory integrated Docker smoke
+on:
+  push:
+    branches: [codex/taskservice-v2-core]
+    paths:
+      - '.github/workflows/taskservice-fullstack-lowmem-benchmark.yml'
+      - 'v2/ops/compose-lowmem.experimental.yaml'
+      - 'v2/ops/clamd.conf'
+permissions: { contents: read }
+jobs:
+  integrated-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build real TaskService container off production host
+        shell: bash
+        run: docker build -t taskservice:memory-ci -f v2/Dockerfile .
+      - name: Exercise low-memory API, DB, worker, ClamAV stack with synthetic settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p v2/ops/secrets
+          cd v2/ops
+          cat > .env <<'ENV'
+          TASKSERVICE_IMAGE=taskservice:memory-ci
+          TASKSERVICE_POSTGRES_IMAGE=postgres:18
+          TASKSERVICE_CLAMAV_IMAGE=clamav/clamav:stable
+          TASKSERVICE_HTTP_PORT=18080
+          ENV
+          for key in POSTGRES_PASSWORD TASKSERVICE_MIGRATOR_PASSWORD TASKSERVICE_API_PASSWORD TASKSERVICE_WORKER_PASSWORD TASKSERVICE_PLATFORM_PASSWORD; do printf '%s=%s\n' "$key" "$(openssl rand -hex 24)" >> secrets/db.env; done
+          set -a; source secrets/db.env; set +a
+          echo "ConnectionStrings__Migration=Host=db;Database=taskservice;Username=taskservice_migrator;Password=$TASKSERVICE_MIGRATOR_PASSWORD" > secrets/migrate.env
+          {
+            echo "ConnectionStrings__Runtime=Host=db;Database=taskservice;Username=taskservice_api;Password=$TASKSERVICE_API_PASSWORD"
+            echo "ConnectionStrings__Platform=Host=db;Database=taskservice;Username=taskservice_platform;Password=$TASKSERVICE_PLATFORM_PASSWORD"
+            printf '%s\n' 'AllowedHosts=localhost' 'TASKSERVICE_HEALTH_HOST=localhost' 'Routing__DefaultTenantSlug=memory-fixture'
+          } > secrets/api.env
+          { echo "ConnectionStrings__Worker=Host=db;Database=taskservice;Username=taskservice_worker;Password=$TASKSERVICE_WORKER_PASSWORD"; printf "%s\n" "Mail__Host=localhost" "Mail__From=ci@example.invalid"; } > secrets/worker.env
+          chmod 600 .env secrets/*.env
+          docker pull clamav/clamav:stable
+          docker create --name scanner-config-source clamav/clamav:stable >/dev/null
+          docker cp scanner-config-source:/etc/clamav/freshclam.conf ./freshclam-lowmem.conf
+          docker rm scanner-config-source >/dev/null
+          sed -i '/^TestDatabases[[:space:]]/d' freshclam-lowmem.conf
+          printf '\nTestDatabases no\n' >> freshclam-lowmem.conf
+          cp compose-lowmem.experimental.yaml /tmp/compose-lowmem-ci.yaml
+          sed -i '/cgroup_parent: taskservice.slice/d' /tmp/compose-lowmem-ci.yaml
+          cp /tmp/compose-lowmem-ci.yaml ./compose-lowmem-ci.yaml
+          trap 'status=$?; docker compose -f compose.yaml -f compose-lowmem-ci.yaml ps -a || true; if [ $status -ne 0 ]; then docker compose -f compose.yaml -f compose-lowmem-ci.yaml logs --tail=45 api worker scanner || true; fi; docker compose -f compose.yaml -f compose-lowmem-ci.yaml down -v --remove-orphans >/dev/null 2>&1 || true' EXIT
+          c=(docker compose -f compose.yaml -f compose-lowmem-ci.yaml)
+          "${c[@]}" up -d --wait --wait-timeout 90 db
+          "${c[@]}" run --rm migrate
+          "${c[@]}" exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d taskservice < ../TaskService/Database/grants.sql
+          "${c[@]}" up -d api worker scanner
+          sleep 20
+          printf '== LIVE MEMORY SAMPLE ==\n'
+          docker stats --no-stream --format '{{.Name}} | {{.MemUsage}} | {{.CPUPerc}}'
+          curl -fsS --max-time 8 -H 'Host: localhost' http://127.0.0.1:18080/health/live
+          printf '\n== CONTAINER STATES ==\n'
+          docker ps -a --filter label=com.docker.compose.project=taskservice --format '{{.Names}} | {{.Status}}'
+          [ "$(docker inspect -f '{{.State.Running}}' taskservice-worker-1)" = true ] || { echo WORKER_NOT_RUNNING; exit 1; }
+          if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-db-1)" = true ]; then exit 1; fi
+          if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-api-1)" = true ]; then exit 1; fi
+          if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-worker-1)" = true ]; then exit 1; fi
+          if [ "$(docker inspect -f '{{.State.OOMKilled}}' taskservice-scanner-1)" = true ]; then exit 1; fi
+          printf 'APP_DB_WORKER_SCAN_MEMORY_SMOKE=ok\n'

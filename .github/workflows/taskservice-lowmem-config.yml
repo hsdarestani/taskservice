@@ -1,0 +1,42 @@
+name: TaskService low-memory resource profile validation
+on:
+  push:
+    branches: [codex/taskservice-v2-core]
+    paths:
+      - 'v2/ops/compose-lowmem.experimental.yaml'
+      - 'v2/ops/taskservice.slice'
+      - '.github/workflows/taskservice-lowmem-config.yml'
+permissions: { contents: read }
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render low-memory Docker Compose configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd v2/ops
+          mkdir -p secrets
+          printf 'TASKSERVICE_IMAGE=example.invalid/taskservice@sha256:%064d\nTASKSERVICE_POSTGRES_IMAGE=postgres:18\nTASKSERVICE_CLAMAV_IMAGE=clamav/clamav:stable\nTASKSERVICE_HTTP_PORT=18080\n' 0 > .env
+          for file in db migrate api worker; do printf 'EXAMPLE_ENV_VAR=placeholder\n' > "secrets/$file.env"; done
+          docker compose -f compose.yaml -f compose-lowmem.experimental.yaml config --format json > /tmp/taskservice-lowmem.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/taskservice-lowmem.json'))
+          services=x['services']
+          expected={'db':320,'api':256,'worker':256,'scanner':1344}
+          for name,mib in expected.items():
+              s=services[name]
+              assert s['cgroup_parent']=='taskservice.slice',(name,s)
+              raw=s['mem_limit']
+              actual=int(raw[:-1]) if isinstance(raw,str) and raw.endswith('m') else int(raw)//1048576
+              assert actual<=mib,(name,raw)
+              print('PROFILE',name,'limit_mib',actual,'parent',s['cgroup_parent'])
+          assert not services['db'].get('ports')
+          assert not services['scanner'].get('ports')
+          assert services['api']['ports'][0]['host_ip']=='127.0.0.1'
+          print('LOW_MEMORY_CONFIG=valid')
+          PY
+          systemd-analyze verify taskservice.slice || exit 1

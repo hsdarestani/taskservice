@@ -1,0 +1,100 @@
+name: taskservice
+
+x-app: &app
+  image: ${TASKSERVICE_IMAGE:?Set a verified TaskService release image}
+  init: true
+  read_only: true
+  tmpfs: ['/tmp:rw,noexec,nosuid,size=64m']
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  db:
+    image: ${TASKSERVICE_POSTGRES_IMAGE:?Set a pinned PostgreSQL 18 image}
+    restart: unless-stopped
+    env_file: ./secrets/db.env
+    environment:
+      POSTGRES_DB: taskservice
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=40, -c, work_mem=4MB]
+    volumes:
+      - postgres:/var/lib/postgresql
+      - ./postgres/initialize.sh:/docker-entrypoint-initdb.d/10-taskservice.sh:ro
+    networks: [data]
+    cpus: 1.0
+    mem_limit: 640m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$${POSTGRES_USER:-postgres}" -d taskservice']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    <<: *app
+    restart: unless-stopped
+    env_file: ./secrets/api.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Operations__RequireProductionReadiness: "true"
+      ClamAv__Host: scanner
+    depends_on:
+      db: {condition: service_healthy}
+    ports: ['127.0.0.1:${TASKSERVICE_HTTP_PORT:?Set a free loopback port}:8080']
+    networks: [data, scan, egress]
+    volumes: [keys:/var/lib/taskservice/keys]
+    cpus: 0.75
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS --max-time 5 -H "Host: $$TASKSERVICE_HEALTH_HOST" http://127.0.0.1:8080/health/ready >/dev/null']
+      interval: 15s
+      timeout: 7s
+      retries: 4
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: [worker]
+    restart: unless-stopped
+    env_file: ./secrets/worker.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ClamAv__Host: scanner
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [data, scan, egress]
+    volumes: [keys:/var/lib/taskservice/keys]
+    cpus: 0.5
+    mem_limit: 512m
+
+  migrate:
+    <<: *app
+    profiles: [tools]
+    command: [migrate]
+    env_file: ./secrets/migrate.env
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [data]
+    cpus: 0.5
+    mem_limit: 384m
+
+  scanner:
+    image: ${TASKSERVICE_CLAMAV_IMAGE:?Set a pinned supported ClamAV image}
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_MILTERD: 'true'
+    networks: [scan, updates]
+    volumes:
+      - signatures:/var/lib/clamav
+      - ./clamd.conf:/etc/clamav/clamd.conf:ro
+    cpus: 0.75
+    mem_limit: 3584m
+
+networks:
+  data: {internal: true}
+  scan: {internal: true}
+  egress: {}
+  updates: {}
+volumes:
+  postgres: {}
+  signatures: {}
+  keys: {}

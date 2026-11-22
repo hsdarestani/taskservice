@@ -1,0 +1,164 @@
+/* TaskService One / Request Workspace — task-first detail experience.
+   Scoped to .request-workspace so customer discovery and other portal pages stay intact. */
+.request-workspace {
+  --ticket-border:#e1e7ef; --ticket-text:#17243c; --ticket-muted:#6b7a91;
+  --ticket-blue:#2563eb; --ticket-canvas:#f5f7fb;
+  color:var(--ticket-text); width:100%; min-width:0; font-size:15px;
+}
+.request-workspace-header { margin:0 0 23px; }
+.request-workspace-back {
+  display:inline-flex; align-items:center; gap:8px; color:#536786;
+  text-decoration:none; min-height:36px; font-size:13px; font-weight:650; margin:0 0 13px;
+}
+.request-workspace-back:hover {color:var(--ticket-blue);}
+.request-workspace-title-line { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+.request-workspace-title {min-width:0;}
+.request-workspace-kicker {
+  margin:0 0 6px!important; color:#6480ac!important; font-size:11px; text-transform:uppercase;
+  font-weight:780; letter-spacing:.1em;
+}
+.request-workspace-title h1 {
+  font-size:clamp(28px,3.3vw,40px); line-height:1.17; letter-spacing:-.045em;
+  font-weight:790; margin:0 0 10px; overflow-wrap:anywhere; max-width:28ch;
+}
+.request-workspace-title > p:last-child {font-size:13px; line-height:1.5; color:var(--ticket-muted);margin:0;}
+.request-workspace-title-line > .badge {margin-top:22px;flex:none;padding:7px 13px;font-size:12px;}
+.request-workspace-tabs {
+  display:flex; gap:2px; align-items:center; overflow-x:auto; border-bottom:1px solid var(--ticket-border);
+  margin:0 0 23px; scrollbar-width:thin;
+}
+.request-workspace-tabs button {
+  background:transparent; border:0; box-shadow:none; color:#687992;
+  padding:13px 15px 14px; border-bottom:2.5px solid transparent; border-radius:0;
+  min-height:48px; display:inline-flex; flex:none; align-items:center; gap:9px;
+  font-size:13px; font-weight:650; white-space:nowrap;
+}
+.request-workspace-tabs button[aria-selected="true"] {color:#205ac4;border-bottom-color:#2563eb;}
+.request-workspace-tabs button:hover {color:#205ac4;background:#ebf2fc;}
+.request-workspace-tabs button:focus-visible {outline:2px solid #2563eb;outline-offset:-3px;}
+.request-workspace-mobile-tab {display:none;}
+.request-workspace-content {min-width:0;}
+.request-workspace-overview {
+  display:grid; grid-template-columns:minmax(0,1.7fr) minmax(260px,.82fr);
+  gap:20px; align-items:start;
+}
+.request-workspace-primary,.request-workspace-aside {display:grid;gap:18px;min-width:0;}
+.request-workspace .ticket-surface {
+  background:#fff; border:1px solid var(--ticket-border); border-radius:15px;
+  box-shadow:0 2px 14px rgba(19,42,80,.028); padding:25px; margin:0; min-width:0;
+}
+.ticket-surface-heading {display:flex;gap:12px;align-items:center;margin-bottom:21px;}
+.ticket-heading-icon {
+  flex:none;width:39px;height:39px;border-radius:11px;display:grid;place-items:center;
+  color:#2563eb;background:#eaf2ff;
+}
+.ticket-surface-heading h2,.request-workspace .ticket-contact h2 {
+  font-size:17px;font-weight:760;letter-spacing:-.025em;margin:0;line-height:1.3;
+}
+.ticket-surface-heading p {font-size:12px;color:var(--ticket-muted);margin:4px 0 0;line-height:1.4;}
+.request-workspace .ticket-description {font-size:15px;line-height:1.8;color:#384a64;margin:0;}
+.ticket-attachments {margin-top:24px;border-top:1px solid var(--ticket-border);padding-top:17px;}
+.ticket-attachments h3 {
+  margin:0 0 10px!important;display:flex;align-items:center;gap:9px;font-size:13px!important;font-weight:730;
+}
+.ticket-attachments h3 span {font-size:11px;background:#eff3fa;color:#526785;padding:2px 7px;border-radius:7px;}
+.ticket-attachment-list {display:flex;flex-wrap:wrap;gap:9px;}
+.request-workspace .ticket-attachment {
+  border:1px solid #dce6f5;background:#f7faff;border-radius:9px;padding:10px 12px;
+  display:inline-flex;align-items:center;gap:8px;text-decoration:none;font-size:12px;font-weight:650;min-height:41px;
+}
+.ticket-attachment.unavailable {color:#7c8898;background:#f8f9fb;}
+.ticket-appointment-body {display:flex;flex-direction:column;align-items:flex-start;gap:8px;}
+.ticket-datetime {display:grid;gap:5px;font-size:15px;}
+.ticket-datetime strong {font-size:17px;font-weight:760;color:var(--ticket-text);}
+.ticket-datetime span,.ticket-appointment-body small {font-size:12px;color:var(--ticket-muted);}
+.ticket-appointment-body .badge {margin-top:5px;}
+.ticket-appointment-note {background:#f4f8ff;border-left:3px solid #79aaf1;padding:10px 14px;border-radius:0 9px 9px 0;font-size:13px!important;}
+.ticket-empty {display:flex;gap:12px;align-items:center;color:#8a9ab1;}
+.ticket-empty p {font-size:13px;color:#77869c;margin:0;}
+.request-workspace .ticket-contact {padding:22px 23px;}
+.ticket-contact h2 {margin-bottom:19px!important;}
+.ticket-contact-avatar {width:40px;height:40px;display:grid;place-items:center;background:#f1f4fa;color:#6a829f;border-radius:11px;margin-bottom:12px;}
+.ticket-contact strong {font-size:14px;display:block;}
+.ticket-contact a {font-size:13px;display:inline-block;margin:7px 0 0;}
+.ticket-surface-heading-inline {justify-content:space-between;align-items:baseline;gap:6px;margin-bottom:16px;}
+.ticket-surface-heading-inline button {
+  border:0;background:transparent;min-height:32px;padding:3px 5px;
+  font-size:12px;font-weight:700;color:#2563eb;white-space:nowrap;
+}
+.ticket-timeline-mini,.ticket-timeline-full {list-style:none;margin:0;padding:0;}
+.ticket-timeline-mini li {display:grid;gap:5px;padding:0 0 17px 20px;border-left:1.5px solid #dce6f3;position:relative;}
+.ticket-timeline-mini li:last-child {border-left-color:transparent;padding-bottom:0;}
+.ticket-timeline-mini li::before {
+  content:"";position:absolute;width:9px;height:9px;border-radius:50%;top:4px;left:-5px;
+  border:2px solid #fff;background:#93b8ec;box-shadow:0 0 0 1px #b2c9ea;
+}
+.ticket-timeline-mini strong {font-size:12px;font-weight:680;}
+.ticket-timeline-mini time {font-size:11px;color:var(--ticket-muted);}
+.request-workspace .ticket-quick-action {
+  border:1px solid #2057cb;background:#2563eb;color:#fff;border-radius:11px;
+  font-size:13px;min-height:48px;padding:11px 16px;
+  display:flex;justify-content:space-between;align-items:center;font-weight:740;
+}
+.request-workspace .ticket-quick-action:hover {background:#184dc2;}
+.request-workspace .ticket-focus-view {width:min(100%,970px);margin:0 auto;}
+.request-workspace .ticket-view-heading {margin-bottom:18px;}
+.ticket-view-heading h2 {font-size:23px;letter-spacing:-.035em;margin:0 0 4px;}
+.ticket-view-heading p {font-size:13px;color:var(--ticket-muted);margin:0;}
+.request-workspace .ticket-focus-view > .panel {
+  border-radius:15px;box-shadow:0 2px 14px rgba(19,42,80,.025);
+  padding:clamp(20px,3vw,31px);margin:0 0 16px;
+}
+.request-workspace .ticket-focus-view > .panel > h2 {font-size:17px;}
+.request-workspace .ticket-focus-view label {font-size:13px;}
+.request-workspace .ticket-focus-view input,
+.request-workspace .ticket-focus-view select,
+.request-workspace .ticket-focus-view textarea {font-size:14px;min-height:45px;}
+.request-workspace .ticket-focus-view button.primary {min-height:45px;font-size:13px;}
+.request-workspace .ticket-focus-view .invoice-item {padding:18px 0;}
+.request-workspace .ticket-focus-view .invoice-item + .invoice-item {border-top:1px solid var(--ticket-border);}
+.request-workspace .ticket-focus-view .messages {border:1px solid var(--ticket-border);border-radius:11px;padding:0 16px;}
+.request-workspace .ticket-focus-view .messages li {padding:16px 0;}
+.request-workspace .ticket-actions-view > .panel {max-width:790px;}
+.request-workspace .ticket-actions-view .panel form {display:grid;gap:4px;max-width:720px;}
+.request-workspace .ticket-actions-view .panel form > .primary {justify-self:start;margin-top:3px;}
+.request-workspace .ticket-full-history {width:min(100%,800px);margin:0 auto;padding:28px;}
+.ticket-timeline-full {padding:3px 0 0 18px;}
+.ticket-timeline-full li {position:relative;padding:0 0 25px 24px;border-left:2px solid #dce7f5;display:grid;gap:5px;}
+.ticket-timeline-full li:last-child {border-left-color:transparent;}
+.ticket-timeline-full li::before {content:"";position:absolute;top:4px;left:-6px;width:10px;height:10px;background:#2563eb;border:2px solid white;border-radius:50%;box-shadow:0 0 0 1px #8db4ee;}
+.ticket-timeline-full strong {font-size:14px;}
+.ticket-timeline-full time {font-size:12px;color:var(--ticket-muted);}
+.ticket-timeline-full p {font-size:13px;background:#f5f7fb;padding:12px;border-radius:9px;}
+@media(max-width:1050px) {
+  .request-workspace-overview {grid-template-columns:minmax(0,1.35fr) minmax(225px,.85fr);gap:14px;}
+  .request-workspace .ticket-surface {padding:20px;}
+  .request-workspace-tabs button {padding:12px 10px;font-size:12px;gap:6px;}
+}
+@media(max-width:780px) {
+  .request-workspace-overview {grid-template-columns:1fr;gap:15px;}
+  .request-workspace-aside {grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;}
+  .request-workspace .ticket-quick-action {grid-column:1/-1;}
+  .request-workspace-tabs {display:none;}
+  .request-workspace-mobile-tab {display:grid;gap:7px;font-size:12px;font-weight:740;color:#536780;margin:0 0 17px;}
+  .request-workspace-mobile-tab select {min-height:46px;font-size:14px;background:#fff;border:1px solid #cbd6e7;border-radius:10px;padding:10px 12px;width:100%;margin:0;}
+  .request-workspace-title-line {align-items:flex-start;gap:14px;}
+}
+@media(max-width:520px) {
+  .request-workspace-title-line {display:grid;gap:9px;}
+  .request-workspace-title-line > .badge {margin:0;justify-self:start;}
+  .request-workspace-title h1 {font-size:27px;}
+  .request-workspace-aside {grid-template-columns:1fr;}
+  .request-workspace .ticket-surface {padding:19px 16px;border-radius:13px;}
+  .ticket-surface-heading {margin-bottom:17px;}
+  .request-workspace .ticket-description {font-size:14px;}
+  .request-workspace .ticket-focus-view > .panel {padding:18px 16px;}
+  .request-workspace .ticket-focus-view .columns {grid-template-columns:1fr;}
+}
+@media(prefers-reduced-motion:reduce) {
+  .request-workspace-tabs button {transition:none;}
+}
+
+.ticket-timeline-empty {font-size:12px;line-height:1.6;color:#7b8ba3;background:#f7f9fc;border:1px dashed #dce6f0;border-radius:10px;padding:14px 13px;margin:0;}
+.request-workspace .ticket-focus-view > .panel {padding:clamp(22px,3.2vw,32px);}
+.request-workspace .ticket-focus-view > .panel .panel-heading {padding-bottom:13px;border-bottom:1px solid #edf1f7;}

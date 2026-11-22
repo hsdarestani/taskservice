@@ -1,0 +1,63 @@
+name: TaskService low-memory ClamAV update-test benchmark
+on:
+  push:
+    branches: [codex/taskservice-v2-core]
+    paths:
+      - '.github/workflows/taskservice-low-memory-freshclam-benchmark.yml'
+permissions: { contents: read }
+jobs:
+  scan-memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        memory_mib: [1344, 1536]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create official freshclam configuration with memory-saving update mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull clamav/clamav:stable
+          docker create --name scanner-original clamav/clamav:stable >/dev/null
+          docker cp scanner-original:/etc/clamav/freshclam.conf ./freshclam-lowmem.conf
+          docker rm scanner-original >/dev/null
+          sed -i '/^TestDatabases[[:space:]]/d' freshclam-lowmem.conf
+          printf '\nTestDatabases no\n' >> freshclam-lowmem.conf
+          grep '^TestDatabases no$' freshclam-lowmem.conf
+          docker run -d --name scanner-test --memory=${{ matrix.memory_mib }}m --memory-swap=${{ matrix.memory_mib }}m --cpus=0.75 --pids-limit=100 -v "$PWD/v2/ops/clamd.conf:/etc/clamav/clamd.conf:ro" -v "$PWD/freshclam-lowmem.conf:/etc/clamav/freshclam.conf:ro" clamav/clamav:stable
+      - name: Verify scanner starts and detects EICAR at limited RAM
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for i in $(seq 1 60); do
+            alive="$(docker inspect -f '{{.State.Running}}' scanner-test)"
+            if [ "$alive" != true ]; then echo 'SCANNER_EXITED=1'; break; fi
+            echo "SCAN_MEM_SAMPLE_$i=$(docker stats --no-stream --format '{{.MemUsage}}' scanner-test)"
+            if docker exec scanner-test sh -c 'printf "PING\n" | nc -w 3 127.0.0.1 3310' 2>/dev/null | grep -q PONG; then ready=1; break; fi
+            sleep 5
+          done
+          echo "MEMORY_CEILING=${{ matrix.memory_mib }}MiB"
+          echo "SCANNER_READY=$ready"
+          if [ "$ready" -eq 1 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          Path('eicar.txt').write_bytes(b'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*')
+          PY
+            docker cp eicar.txt scanner-test:/tmp/eicar.txt
+            set +e
+            result="$(docker exec scanner-test clamdscan /tmp/eicar.txt 2>&1)"
+            code="$?"
+            set -e
+            echo "$result"
+            echo "EICAR_DETECTION_EXIT=$code"
+            [ "$code" -eq 1 ] || ready=0
+          fi
+          echo "OOM_KILLED=$(docker inspect -f '{{.State.OOMKilled}}' scanner-test)"
+          docker logs scanner-test --tail 25 2>&1
+          [ "$ready" -eq 1 ]
+      - name: Clean up
+        if: always()
+        run: docker rm -f scanner-test >/dev/null 2>&1 || true

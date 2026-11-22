@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, Building2, CalendarDays, ChevronRight, ClipboardList, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, ArrowLeft, Building2, CalendarDays, ChevronRight, ClipboardList, FileText, History, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, Receipt, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
@@ -14,6 +14,7 @@ import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
 import './portal.css';
 import './taskservice-one.css';
+import './request-detail.css';
 
 const states: Record<string, string> = {
   received: 'Eingegangen', verified: 'Bestätigt', under_review: 'In Prüfung',
@@ -522,42 +523,139 @@ function ClaimRequest({ session, id }: { session: Session; id: string }) {
   </Panel>;
 }
 
+type RequestDetailTab = 'overview' | 'actions' | 'report' | 'invoices' | 'messages' | 'internal' | 'timeline';
+
 function RequestDetail({ session, id, portal }: { session: Session; id: string; portal: Portal }) {
   const [revision, setRevision] = useState(0);
+  const [tab, setTab] = useState<RequestDetailTab>('overview');
   const detail = useLoad<Detail>(session.signedIn ? api + '/requests/' + id : undefined, revision);
   const row = detail.data;
   if (!session.signedIn) return <Panel><h1>Servicevorgang</h1>
     <a href={portal === 'customer' ? login : login + '&mode=workforce'}>Anmelden</a></Panel>;
   if (!row) return <Panel>{detail.error ? <Notice text={detail.error}/> : <p role="status">Vorgang wird geladen …</p>}</Panel>;
-  return <>
-    <div className="workspace-heading"><a href={base + (portal === 'company' ? '/betrieb#requests' : portal === 'technician' ? '/technik#requests' : '/konto')}>Übersicht</a>
-      <h1>{row.title}</h1><Badge state={row.state}/></div>
-    <div className="columns">
-      <Panel><h2>Beschreibung</h2><p className="preserve">{row.description}</p>
-        {row.contactName && <p><strong>Kontakt</strong><br/>{row.contactName}{row.contactPhone && <><br/>{row.contactPhone}</>}</p>}
-        {row.photos?.length > 0 && <div className="attached-photos"><h3>Fotos zur Anfrage</h3><ul>
-          {row.photos.map(photo => <li key={photo.id}>{photo.scanStatus === 'clean'
-            ? <a href={sessionUrl(api + '/requests/' + id + '/photos/' + photo.id)}>Foto {photo.ordinal} herunterladen</a>
-            : 'Foto ' + photo.ordinal + (photo.scanStatus === 'pending' ? ' · Wird geprüft' : ' · Nicht verfügbar')}</li>)}
-        </ul></div>}
-        {row.appointment && <><h2>Einsatztermin</h2>
-          <p>{date(row.appointment.startsAt)} bis {date(row.appointment.endsAt)} Uhr (Berlin)</p>
-          <Badge state={row.appointment.arrivalStatus}/>
-          {row.appointment.customerConfirmedAt && <small>Bestätigt am {date(row.appointment.customerConfirmedAt)}</small>}
-          {row.appointment.updatedAt && <small>Aktualisiert am {date(row.appointment.updatedAt)}</small>}
-          {row.appointment.customerNote && <p className="preserve">{row.appointment.customerNote}</p>}</>}
-      </Panel>
-      <Panel><h2>Verlauf</h2><ol className="history">{row.history.map((x, i) =>
-        <li key={i}><strong>{states[x.state] || x.state}</strong><small>{date(x.at)}</small>
-          {x.privateNote && <p className="preserve">{x.privateNote}</p>}
-        </li>)}</ol></Panel>
+
+  // Permissions are provided by the request API; never synthesize missing actions in the UI.
+  const options: { id: RequestDetailTab; label: string; icon: typeof ClipboardList }[] = [
+    { id: 'overview', label: 'Überblick', icon: ClipboardList },
+    ...(row.actions.length > 0 ? [{ id: 'actions' as const, label: 'Bearbeiten', icon: Activity }] : []),
+    { id: 'report', label: 'Arbeitsbericht', icon: FileText },
+    { id: 'invoices', label: 'Rechnungen', icon: Receipt },
+    { id: 'messages', label: 'Nachrichten', icon: MessagesSquare },
+    ...(row.canReadInternal ? [{ id: 'internal' as const, label: 'Interne Notizen', icon: ShieldCheck }] : []),
+    { id: 'timeline', label: 'Verlauf', icon: History },
+  ];
+  const selected = options.some(item => item.id === tab) ? tab : 'overview';
+  const back = base + (portal === 'company' ? '/betrieb#requests' : portal === 'technician' ? '/technik#requests' : '/konto');
+  const readyPhotos = row.photos?.filter(photo => photo.scanStatus === 'clean') ?? [];
+  const recentHistory = row.history.slice(-4).reverse();
+  return <div className="request-workspace">
+    <header className="request-workspace-header">
+      <a className="request-workspace-back" href={back}><ArrowLeft size={17} aria-hidden/>Zurück zu den Vorgängen</a>
+      <div className="request-workspace-title-line">
+        <div className="request-workspace-title">
+          <p className="request-workspace-kicker">Servicevorgang <span aria-hidden>·</span> {id.slice(0, 8)}</p>
+          <h1>{row.title}</h1>
+          <p>Erstellt am {date(row.createdAt)} <span aria-hidden>·</span> {row.serviceCategory ? categoryNames[row.serviceCategory] || row.serviceCategory : 'Serviceanfrage'}</p>
+        </div>
+        <Badge state={row.state}/>
+      </div>
+    </header>
+
+    <div className="request-workspace-tabs" role="tablist" aria-label="Bereiche des Servicevorgangs">
+      {options.map(item => <button key={item.id} type="button" role="tab"
+        id={'ticket-tab-' + item.id} aria-controls="ticket-panel" aria-selected={selected === item.id}
+        tabIndex={selected === item.id ? 0 : -1}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft' && event.key !== 'Home' && event.key !== 'End') return;
+          event.preventDefault();
+          const current = options.findIndex(option => option.id === selected);
+          const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 :
+            (current + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length;
+          setTab(options[nextIndex].id);
+          const nextId = options[nextIndex].id;
+          requestAnimationFrame(() => document.getElementById('ticket-tab-' + nextId)?.focus());
+        }}
+        onClick={() => setTab(item.id)}>
+        <item.icon size={17} strokeWidth={1.9} aria-hidden/><span>{item.label}</span>
+      </button>)}
     </div>
-    {row.actions.length > 0 && <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(x => x + 1)}/>}
-    <ReportPanel id={id} session={session}/>
-    <InvoicesPanel id={id} session={session}/>
-    <Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/>
-    {row.canReadInternal && <Chat session={session} id={id} channel="internal" title="Interne Notizen"/>}
-  </>;
+    <label className="request-workspace-mobile-tab">Bereich auswählen
+      <select aria-label="Bereich des Servicevorgangs" value={selected} onChange={event => setTab(event.target.value as RequestDetailTab)}>
+        {options.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+      </select>
+    </label>
+
+    <div className="request-workspace-content" role="tabpanel" id="ticket-panel" aria-labelledby={'ticket-tab-' + selected} tabIndex={0}>
+      {selected === 'overview' && <div className="request-workspace-overview">
+        <div className="request-workspace-primary">
+          <section className="ticket-surface" aria-labelledby="ticket-description">
+            <div className="ticket-surface-heading"><div className="ticket-heading-icon"><ClipboardList size={18} aria-hidden/></div>
+              <div><h2 id="ticket-description">Anfrage im Überblick</h2><p>Beschreibung und wichtige Angaben</p></div></div>
+            <p className="ticket-description preserve">{row.description}</p>
+            {row.photos?.length > 0 && <div className="ticket-attachments">
+              <h3><FileText size={16} aria-hidden/> Anhänge <span>{row.photos.length}</span></h3>
+              <div className="ticket-attachment-list">{row.photos.map(photo => photo.scanStatus === 'clean'
+                ? <a key={photo.id} className="ticket-attachment" href={sessionUrl(api + '/requests/' + id + '/photos/' + photo.id)}>
+                  <FileText size={17} aria-hidden/>Foto {photo.ordinal} herunterladen
+                </a>
+                : <span key={photo.id} className="ticket-attachment unavailable">Foto {photo.ordinal} · {photo.scanStatus === 'pending' ? 'Wird geprüft' : 'Nicht verfügbar'}</span>)}</div>
+            </div>}
+          </section>
+          <section className="ticket-surface ticket-appointment" aria-labelledby="ticket-appointment-heading">
+            <div className="ticket-surface-heading"><div className="ticket-heading-icon"><CalendarDays size={18} aria-hidden/></div>
+              <div><h2 id="ticket-appointment-heading">Einsatztermin</h2><p>Zeitpunkt und Anfahrtsstatus</p></div></div>
+            {row.appointment ? <div className="ticket-appointment-body">
+              <div className="ticket-datetime"><strong>{date(row.appointment.startsAt)}</strong>
+                <span>bis {date(row.appointment.endsAt)} Uhr · Europe/Berlin</span></div>
+              <Badge state={row.appointment.arrivalStatus}/>
+              {row.appointment.customerConfirmedAt && <small>Bestätigt am {date(row.appointment.customerConfirmedAt)}</small>}
+              {row.appointment.updatedAt && <small>Aktualisiert am {date(row.appointment.updatedAt)}</small>}
+              {row.appointment.customerNote && <p className="preserve ticket-appointment-note">{row.appointment.customerNote}</p>}
+            </div> : <div className="ticket-empty"><CalendarDays size={22} aria-hidden/><p>Es ist noch kein Einsatztermin vereinbart.</p></div>}
+          </section>
+        </div>
+        <aside className="request-workspace-aside" aria-label="Weitere Vorgangsdetails">
+          <section className="ticket-surface ticket-contact">
+            <h2>Kontakt</h2>
+            {row.contactName ? <><div className="ticket-contact-avatar"><UserRound size={20} aria-hidden/></div>
+              <strong>{row.contactName}</strong>
+              {row.contactPhone && <a href={'tel:' + row.contactPhone}>{row.contactPhone}</a>}</>
+              : <p className="muted">Keine Kontaktdaten in dieser Ansicht.</p>}
+          </section>
+          <section className="ticket-surface ticket-recent-history">
+            <div className="ticket-surface-heading ticket-surface-heading-inline"><h2>Letzte Aktivitäten</h2>
+              <button type="button" onClick={() => setTab('timeline')}>Alle ansehen</button></div>
+            <ol className="ticket-timeline-mini">{recentHistory.map((entry, index) =>
+              <li key={index}><strong>{states[entry.state] || entry.state}</strong><time dateTime={entry.at}>{date(entry.at)}</time></li>)}</ol>
+          </section>
+          {row.actions.length > 0 && <button className="ticket-quick-action" onClick={() => setTab('actions')}>
+            Vorgang bearbeiten<ChevronRight size={17} aria-hidden/>
+          </button>}
+        </aside>
+      </div>}
+
+      {selected === 'actions' && row.actions.length > 0 && <div className="ticket-focus-view ticket-actions-view">
+        <div className="ticket-view-heading"><h2>Vorgang bearbeiten</h2><p>Nur für deine Rolle freigegebene Aktionen stehen hier zur Auswahl.</p></div>
+        <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(value => value + 1)}/>
+      </div>}
+      {selected === 'report' && <div className="ticket-focus-view"><div className="ticket-view-heading">
+        <h2>Arbeitsbericht</h2><p>Dokumentation, Prüfung und Veröffentlichung.</p>
+      </div><ReportPanel id={id} session={session}/></div>}
+      {selected === 'invoices' && <div className="ticket-focus-view"><div className="ticket-view-heading">
+        <h2>Rechnungen</h2><p>Belege, Versionen und Freigaben.</p>
+      </div><InvoicesPanel id={id} session={session}/></div>}
+      {selected === 'messages' && <div className="ticket-focus-view"><Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/></div>}
+      {selected === 'internal' && row.canReadInternal && <div className="ticket-focus-view">
+        <Chat session={session} id={id} channel="internal" title="Interne Notizen"/></div>}
+      {selected === 'timeline' && <section className="ticket-surface ticket-full-history">
+        <div className="ticket-surface-heading"><div className="ticket-heading-icon"><History size={18} aria-hidden/></div>
+          <div><h2>Vorgangsverlauf</h2><p>Chronologie aller Statusänderungen</p></div></div>
+        <ol className="ticket-timeline-full">{[...row.history].reverse().map((entry, index) => <li key={index}>
+          <strong>{states[entry.state] || entry.state}</strong><time dateTime={entry.at}>{date(entry.at)}</time>
+          {entry.privateNote && <p className="preserve">{entry.privateNote}</p>}</li>)}</ol>
+      </section>}
+    </div>
+  </div>;
 }
 
 const reportStates: Record<string, string> = {

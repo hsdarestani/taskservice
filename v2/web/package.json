@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "test:access": "node --experimental-strip-types --test tests/workspaceAccess.test.mjs"
   },
   "dependencies": {
     "@microsoft/signalr": "10.0.0",

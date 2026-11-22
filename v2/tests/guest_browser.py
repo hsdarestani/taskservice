@@ -81,6 +81,17 @@ with sync_playwright() as playwright:
         assert hit.value.status == 201, (hit.value.status, hit.value.text())
         assert hit.value.request.post_data_json["photos"][0]["mime"] == "image/png"
         expect(dialog.get_by_role("heading", name="Deine Anfrage ist eingegangen.")).to_be_visible()
+
+        # TaskService One: unauthenticated visitors never see privileged menus or forms.
+        for forbidden in ("/plattform", f"/unternehmen/{tenant}/betrieb", f"/unternehmen/{tenant}/technik"):
+            page.goto(base + forbidden, wait_until="domcontentloaded")
+            expect(page.get_by_role("heading", name="Im Arbeitsbereich anmelden")).to_be_visible()
+            expect(page.locator(".workspace-sidebar")).to_have_count(0)
+            expect(page.locator(".workspace-signout")).to_have_count(0)
+            expect(page.locator(".demo-bar nav")).to_have_count(0)
+            assert page.evaluate("document.documentElement.scrollWidth") <= width
+            name = forbidden.strip("/").replace("/", "-")
+            page.screenshot(path=output / f"v2-access-{name}-{width}.png", full_page=True)
         page.close()
     browser.close()
 print("Service catalog, search, three wizard steps, validation and photo submission passed at 390, 768 and 1366 pixels.")

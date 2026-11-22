@@ -25,7 +25,11 @@ with sync_playwright() as playwright:
         extra_http_headers={"X-Test-Subject": "platform-admin", "X-Test-Mfa": "1"})
     platform_page = platform.new_page()
     platform_page.goto(origin + "/plattform", wait_until="domcontentloaded")
+    expect(platform_page.get_by_role("heading", name="Plattformübersicht")).to_be_visible()
+    platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
     setup = platform_page.locator("section").filter(has=platform_page.get_by_role("heading", name="Neues Unternehmen"))
+    # The new design keeps provisioning collapsed until explicitly requested.
+    setup.locator("details.company-create > summary").click()
     slug = "qa-browser-" + os.environ["TASKSERVICE_BROWSER_REQUEST"][:8]
     setup.get_by_label("Portaladresse", exact=False).fill(slug)
     setup.get_by_label("Unternehmensname").fill("Servicewerkstatt Browserprüfung")
@@ -33,20 +37,36 @@ with sync_playwright() as playwright:
         response.request.method == "POST") as creation:
         setup.get_by_role("button", name="Unternehmen anlegen").click()
     assert creation.value.status == 201, (creation.value.status, creation.value.text())
-    company = platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)
+    company = platform_page.locator("details.company-record").filter(
+        has=platform_page.get_by_text("Servicewerkstatt Browserprüfung", exact=True))
     expect(company).to_be_visible()
-    company.click()
+    company.locator("summary").click()
     platform_page.get_by_role("button", name="Ersteinrichtung anzeigen").click()
     platform_page.get_by_label("Name der Administration").fill("Test Administration")
     platform_page.get_by_label("E-Mail-Adresse der Administration").fill("browser-initial@example.invalid")
     with platform_page.expect_response(lambda r: r.url.endswith("/setup") and r.request.method == "POST") as onboarding:
         platform_page.get_by_role("button", name="Erste Einladung erstellen").click()
     assert onboarding.value.status == 201
+    # Invitations are audited in their own dedicated section, not appended below the company editor.
+    platform_page.get_by_role("link", name="Änderungsprotokoll", exact=True).click()
     expect(platform_page.get_by_text("Erste Administration eingeladen", exact=True)).to_be_visible()
+    platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
     for width, height in ((390, 844), (768, 1024), (1366, 900)):
         platform_page.set_viewport_size({"width": width, "height": height})
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
+        platform_page.screenshot(path=output / f"platform-companies-{width}.png")
+        if width <= 800:
+            platform_page.get_by_label("Bereich auswählen").select_option("overview")
+        else:
+            platform_page.get_by_role("link", name="Übersicht", exact=True).click()
+        expect(platform_page.get_by_role("heading", name="Plattformübersicht")).to_be_visible()
+        assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
         platform_page.screenshot(path=output / f"platform-dashboard-{width}.png")
+        if width <= 800:
+            platform_page.get_by_label("Bereich auswählen").select_option("companies")
+        else:
+            platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
+        expect(platform_page.get_by_role("heading", name="Unternehmen", exact=True).first).to_be_visible()
     platform.close()
 
     for role, route, heading in (
@@ -73,6 +93,8 @@ with sync_playwright() as playwright:
                 desk_page.get_by_label("Vorgang suchen").clear()
                 expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
                 if width == 1366:
+                    desk_page.screenshot(path=output / "betrieb-overview-desktop.png")
+                    desk_page.get_by_role("link", name="Team und Rechte", exact=True).click()
                     team = desk_page.locator("#team")
                     team.get_by_label("Name", exact=True).fill("Test Teammitglied")
                     team.get_by_label("Geschäftliche E-Mail-Adresse").fill("browser-staff@example.invalid")
@@ -86,6 +108,23 @@ with sync_playwright() as playwright:
                     desk_page.evaluate("window.scrollTo(0, 0)")
             desk_page.screenshot(path=output / f"{route}-dashboard-{width}.png")
             desk.close()
+
+    # A valid session of a different role must not expose another workspace shell.
+    for actor, denied_route in (
+        ("tech-a", "/unternehmen/lab/betrieb"),
+        ("admin-a", "/unternehmen/lab/technik"),
+        ("customer-a", "/unternehmen/lab/betrieb"),
+        ("admin-a", "/plattform"),
+    ):
+        context = browser.new_context(viewport={"width": 390, "height": 844}, ignore_https_errors=True,
+            extra_http_headers={"X-Test-Subject": actor, "X-Test-Mfa": "1"})
+        denied_page = context.new_page()
+        denied_page.goto(origin + denied_route, wait_until="domcontentloaded")
+        expect(denied_page.get_by_role("heading", name="Kein Zugriff auf diesen Bereich")).to_be_visible()
+        expect(denied_page.locator(".workspace-sidebar")).to_have_count(0)
+        expect(denied_page.locator(".workspace-mobile-choose")).to_have_count(0)
+        assert denied_page.evaluate("document.documentElement.scrollWidth") <= 390
+        context.close()
 
     def open_as(subject, privileged=False, mobile=False):
         headers = {"X-Test-Subject": subject}

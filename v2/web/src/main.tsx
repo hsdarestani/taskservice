@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, Plug, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, Building2, CalendarDays, ChevronRight, ClipboardList, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
+import { navigationForRole, resolveWorkspaceAccess } from './workspaceAccess';
 import { NativeLogin } from './NativeLogin';
 import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
 import './portal.css';
+import './taskservice-one.css';
 
 const states: Record<string, string> = {
   received: 'Eingegangen', verified: 'Bestätigt', under_review: 'In Prüfung',
@@ -53,6 +55,9 @@ type Portal = 'customer' | 'company' | 'technician' | 'platform';
 function App() {
   const session = useLoad<Session>('/api/v1/session');
   const company = useLoad<Company>(slug ? api : undefined, session.data?.signedIn ? 1 : 0);
+  // Authorization is checked with the real platform API before any platform UI is mounted.
+  const platformProbe = useLoad<{ items: PlatformCompany[] }>(
+    path[0] === 'plattform' && session.data?.signedIn ? '/api/v1/platform/overview' : undefined);
   const role = company.data?.role;
   const requestedView = new URLSearchParams(location.search).get('ansicht');
   const staffDetail = requestId && !isClaimLink && requestedView !== 'konto';
@@ -61,6 +66,8 @@ function App() {
     : path[2] === 'betrieb' || staffDetail && (requestedView === 'betrieb' || role === 'admin' || role === 'dispatcher') ? 'company'
     : 'customer';
   const atCustomerHome = portal === 'customer' && !path[2] && Boolean(slug);
+  const workspaceAccess = resolveWorkspaceAccess(portal, !!session.data?.signedIn, role,
+    { ready: !!platformProbe.data, error: platformProbe.error });
   const catalog = useLoad<ServiceCategory[]>(atCustomerHome ? api + '/catalog' : undefined);
   useEffect(() => {
     const accent = company.data?.accent;
@@ -76,10 +83,7 @@ function App() {
     catch { location.reload(); }
   }
   const demoBanner = session.data.demo && <aside className="demo-bar" aria-label="Demoversion">
-    <strong>DEMO</strong> Bitte nur Testdaten eingeben.
-    {session.data.mailEnabled === false && ' E-Mail-Versand ist deaktiviert.'}
-    {base && <nav aria-label="Demo-Bereiche"><a href={base + '/betrieb'}>Betrieb</a>
-      <a href={base + '/technik'}>Technik</a><a href="/plattform">Plattform</a></nav>}
+    <strong>DEMO</strong><span>Nur Testdaten verwenden.{session.data.mailEnabled === false && ' E-Mail-Versand ist deaktiviert.'}</span>
   </aside>;
   if (path[0] === 'anmelden' && session.data.native) return <>{demoBanner}
     <header className="bar"><Wordmark href="/"/></header>
@@ -90,6 +94,10 @@ function App() {
       <p>Verwende ausschließlich Testdaten. Gib keine echten Kundendaten, vertraulichen Informationen oder privaten Dokumente ein.</p>
       <p>Die Demo speichert die Anmeldedaten deines Testkontos, geschützte Sitzungsschlüssel sowie die von dir erstellten Testanfragen.</p>
     </Panel></main></>;
+  if (portal !== 'customer' && workspaceAccess !== 'allowed') return <>{demoBanner}
+    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name}
+      detail={workspaceAccess === 'denied' && platformProbe.error !== 'Zugriff verweigert.' ? platformProbe.error : undefined}/>
+  </>;
   if (atCustomerHome && company.data) return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
     <CustomerHome base={base} api={api} company={company.data} session={session.data}
@@ -116,6 +124,8 @@ function App() {
   </>;
 }
 
+// The active workspace section is a real view, not a scroll target in an endless page.
+const WorkspaceSectionContext = createContext('overview');
 const workspaceLabels = { platform: 'Plattformverwaltung', company: 'Servicebetrieb', technician: 'Technik' };
 const workspaceMenus = {
   platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
@@ -128,34 +138,67 @@ const workspaceMenus = {
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
 };
 
+function WorkspaceGate({ portal, access, companyName, detail }: {
+  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied'; companyName?: string; detail?: string;
+}) {
+  const heading = access === 'sign-in' ? 'Im Arbeitsbereich anmelden'
+    : access === 'checking' ? 'Zugriff wird geprüft' : 'Kein Zugriff auf diesen Bereich';
+  const destination = access === 'sign-in' ? login + '&mode=workforce' : (base || '/');
+  const message = access === 'sign-in' ? 'Melde dich mit deinem Arbeitskonto an, um den Bereich zu öffnen.'
+    : access === 'checking' ? 'Deine Berechtigungen werden sicher überprüft.'
+    : 'Dein Konto hat für diesen Arbeitsbereich keine Berechtigung.';
+  return <div className="workspace-gate">
+    <header className="workspace-gate-top"><Wordmark href={base || '/'}/><span>{companyName || workspaceLabels[portal]}</span></header>
+    <main id="inhalt" className="workspace-gate-main"><div className="workspace-gate-card">
+      <div className="workspace-gate-icon"><LockKeyhole size={25} aria-hidden/></div>
+      <p className="eyebrow">Sicherer Arbeitsbereich</p><h1>{heading}</h1><p>{message}</p>
+      {access === 'denied' && detail && !detail.toLowerCase().includes('forbidden') && <p className="muted">Der Zugriff konnte nicht bestätigt werden.</p>}
+      {access !== 'checking' && <a className="primary" href={destination}>{access === 'sign-in' ? 'Zur Anmeldung' : 'Zum Serviceportal'}</a>}
+    </div></main>
+  </div>;
+}
+
 function Workspace({ portal, company, signedIn, logout, children }: {
   portal: Exclude<Portal, 'customer'>; company?: Company; signedIn: boolean; logout: () => Promise<void>; children: ReactNode;
 }) {
   const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
-  const menu = workspaceMenus[portal].filter(item => !['team', 'integrations'].includes(item.id) || company?.role === 'admin');
+  const permitted = navigationForRole(portal, company?.role);
+  const menu = workspaceMenus[portal].filter(item => permitted.includes(item.id));
   const defaultSection = menu[0].id;
   const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
+  const activeSection = menu.some(item => item.id === hash) ? hash : defaultSection;
   useEffect(() => {
     const listener = () => setHash(location.hash.slice(1) || defaultSection);
     addEventListener('hashchange', listener);
     return () => removeEventListener('hashchange', listener);
   }, [defaultSection]);
   return <div className={'workspace workspace-' + portal}>
-    <aside className="workspace-sidebar">
-      <Wordmark href={root}/><p className="workspace-label">{workspaceLabels[portal]}</p>
+    <aside className="workspace-sidebar" aria-label={workspaceLabels[portal]}>
+      <div className="workspace-brand"><Wordmark href={root}/><span className="workspace-brand-mark">ONE</span></div>
+      <p className="workspace-label">{workspaceLabels[portal]}</p>
+      <div className="workspace-mobile-choose">
+        <label htmlFor="workspace-section">Bereich auswählen</label>
+        <select id="workspace-section" value={activeSection}
+          onChange={event => location.assign(root + '#' + event.currentTarget.value)}>
+          {menu.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </div>
       <nav aria-label="Arbeitsbereiche">
-        {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && hash === item.id ? 'location' : undefined}>
+        {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && activeSection === item.id ? 'page' : undefined}>
           <item.icon size={19} aria-hidden/><span>{item.name}</span>
         </a>)}
       </nav>
+      <div className="workspace-sidebar-bottom"><ShieldCheck size={15} aria-hidden/>Geschützter Arbeitsbereich</div>
     </aside>
     <div className="workspace-content">
       <header className="workspace-top">
-        <div>{portal === 'technician' && <Wordmark href={root}/>}<strong>{company?.name || 'TaskService'}</strong>
-          <small>{workspaceLabels[portal]}</small></div>
-        {signedIn ? <button className="text-button" onClick={logout}>Abmelden</button> : <a href={login + '&mode=workforce'}>Anmelden</a>}
+        <div className="workspace-breadcrumb"><span>TaskService</span><ChevronRight size={14} aria-hidden/>
+          <strong>{company?.name || workspaceLabels[portal]}</strong></div>
+        <div className="workspace-top-actions"><span className="workspace-role-tag">{portal === 'platform' ? 'Plattformadmin' : company?.role === 'dispatcher' ? 'Prüfung' : portal === 'technician' ? 'Technik' : 'Administration'}</span>
+          {signedIn && <button className="workspace-signout" onClick={logout}><LogOut size={16} aria-hidden/><span>Abmelden</span></button>}
+        </div>
       </header>
-      <main id="inhalt" className="workspace-main">{children}</main>
+      <main id="inhalt" className="workspace-main"><WorkspaceSectionContext.Provider value={activeSection}>{children}</WorkspaceSectionContext.Provider></main>
     </div>
   </div>;
 }
@@ -172,40 +215,90 @@ const platformAction: Record<string, string> = {
 };
 
 function Platform({ session }: { session: Session }) {
+  const section = useContext(WorkspaceSectionContext);
+  const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [cursor, setCursor] = useState('');
   const [auditCursor, setAuditCursor] = useState<{ id: string; before: string }>();
   const overview = useLoad<{ items: PlatformCompany[]; nextCursor?: string }>(session.signedIn
     ? platformApi + '/overview' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '') : undefined, reload);
-  const audit = useLoad<{ items: PlatformAuditEntry[]; next?: { id: string; before: string } }>(overview.data
+  const audit = useLoad<{ items: PlatformAuditEntry[]; next?: { id: string; before: string } }>(overview.data && section === 'audit'
     ? platformApi + '/audit' + (auditCursor ? '?' + new URLSearchParams({ cursor: auditCursor.id, before: auditCursor.before }) : '') : undefined, reload);
   const refresh = () => { setCursor(''); setAuditCursor(undefined); setReload(x => x + 1); };
   return <>
-    <div id="overview" className="workspace-heading"><p className="eyebrow">TaskService</p><h1>Plattformverwaltung</h1>
-      <p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
-    {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Konto mit Mehrfaktor-Anmeldung.</p>
+    <div className="workspace-heading"><p className="eyebrow">TaskService / Plattform</p>
+      <h1>{section === 'companies' ? 'Unternehmen' : section === 'audit' ? 'Änderungsprotokoll' : 'Plattformübersicht'}</h1>
+      <p>{section === 'companies' ? 'Servicebetriebe, Zugänge und Marken an einem Ort verwalten.'
+        : section === 'audit' ? 'Sicher nachvollziehen, was auf der Plattform geändert wurde.'
+        : 'Alle Servicebetriebe und ihre Aktivität im Blick behalten.'}</p>
+    </div>
+    {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Verwaltungskonto.</p>
       <a className="primary" href={login + '&mode=workforce'}>Zur Anmeldung</a></Panel>}
     <Notice text={overview.error}/>
     {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}
     {overview.data && <>
-      <div className="workspace-metrics" aria-label="Unternehmen in dieser Ansicht">
+      {section === 'overview' && <><div className="workspace-metrics" aria-label="Unternehmen in dieser Ansicht">
         <div><Building2 aria-hidden/><span>Unternehmen</span><strong>{overview.data.items.length}</strong></div>
         <div><Activity aria-hidden/><span>Aktive Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'active').length}</strong></div>
         <div><ShieldCheck aria-hidden/><span>Gesperrte Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'suspended').length}</strong></div>
       </div>
-      <div className="platform-company-grid" id="companies"><Panel><h2>Unternehmen</h2>
-        {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
-        <div className="report-history">{overview.data.items.map(item => <details key={item.slug}>
-          <summary>{item.name} · {companyState[item.lifecycle]}</summary>
-          <p>Portaladresse <strong>/unternehmen/{item.slug}</strong></p>
-          {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
-          {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
-            companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
-        </details>)}</div>
-        {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
-        {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-      </Panel><Panel><h2>Neues Unternehmen</h2><CompanyEditor session={session} refresh={refresh}/></Panel></div>
-      <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
+      <div className="platform-overview-grid">
+        <Panel><div className="section-line"><h2>Aktuelle Unternehmen</h2>
+          <a className="text-link" href="/plattform#companies">Alle verwalten</a></div>
+          <div className="platform-quick-list">{overview.data.items.slice(0, 5).map(item =>
+            <div key={item.slug} className="platform-quick-row">
+              <span className="company-avatar" aria-hidden>{item.name.slice(0,1).toUpperCase()}</span>
+              <span className="company-record-info"><strong>{item.name}</strong><small>/unternehmen/{item.slug}</small></span>
+              <span className={'company-status company-status-' + item.lifecycle}>{companyState[item.lifecycle]}</span>
+            </div>)}</div>
+          {overview.data.items.length === 0 && <p className="muted">Noch keine Unternehmen angelegt.</p>}
+        </Panel>
+        <Panel><h2>Verwaltungszentrale</h2>
+          <p className="muted">Unternehmen verwalten, neue Portale anlegen und Änderungen sicher nachverfolgen.</p>
+          <div className="platform-quick-actions">
+            <a href="/plattform#companies"><Building2 size={18} aria-hidden/>Unternehmen verwalten<ChevronRight size={16} aria-hidden/></a>
+            <a href="/plattform#audit"><ShieldCheck size={18} aria-hidden/>Änderungen prüfen<ChevronRight size={16} aria-hidden/></a>
+          </div>
+        </Panel>
+      </div></>}
+      {section === 'companies' && <div className="platform-company-grid" id="companies">
+        <Panel>
+          <div className="section-line platform-section-title"><div><h2>Unternehmen</h2>
+            <p className="muted">Alle Portale, Zugänge und Marken an einem Ort.</p></div>
+            <span className="company-record-count">{overview.data.items.length} erfasst</span>
+          </div>
+          {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
+          <div className="report-history company-directory">{overview.data.items.map(item =>
+            <details key={item.slug} className="company-record" open={expandedCompany === item.slug}
+              onToggle={event => {
+                const opened = event.currentTarget.open;
+                setExpandedCompany(current => opened ? item.slug : current === item.slug ? null : current);
+              }}>
+              <summary><span className="company-avatar" aria-hidden>{item.name.slice(0, 1).toUpperCase()}</span>
+                <span className="company-record-info"><strong>{item.name}</strong>
+                  <small>/unternehmen/{item.slug}</small></span>
+                <span className={'company-status company-status-' + item.lifecycle}>{companyState[item.lifecycle]}</span>
+              </summary>
+              <div className="company-record-body">
+                {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
+                {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
+                  companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
+              </div>
+            </details>)}</div>
+          <div className="platform-pagination">
+            {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
+            {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+          </div>
+        </Panel>
+        <Panel><div className="company-create-heading"><div className="company-create-icon"><Plus size={19} aria-hidden/></div>
+          <div><h2>Neues Unternehmen</h2><p className="muted">Ein neues Serviceportal einrichten.</p></div>
+        </div>
+          <details className="company-create"><summary>Neues Portal erstellen <Plus size={17} aria-hidden/></summary>
+            <CompanyEditor session={session} refresh={refresh}/>
+          </details>
+        </Panel>
+      </div>}
+      {section === 'audit' && <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
         {audit.data?.items.length === 0 && <p className="muted">Es sind noch keine Änderungen erfasst.</p>}
         {audit.data && <ul className="rows">{audit.data.items.map(row => <li key={row.id}>
           <span><strong>{platformAction[row.action]}</strong><small>{row.slug}</small>
@@ -214,7 +307,7 @@ function Platform({ session }: { session: Session }) {
         </li>)}</ul>}
         {audit.data?.next && <button onClick={() => setAuditCursor(audit.data!.next)}>Ältere Änderungen</button>}
         {auditCursor && <button onClick={() => setAuditCursor(undefined)}>Neueste Änderungen</button>}
-      </Panel></div>
+      </Panel></div>}
     </>}
   </>;
 }
@@ -299,16 +392,20 @@ function Account({ session, loginLink, logout }: { session: Session; loginLink: 
 }
 
 function Dashboard({ company, session, portal }: { company: Company; session: Session; portal: 'company' | 'technician' }) {
+  const section = useContext(WorkspaceSectionContext);
   const isCompany = portal === 'company';
+  const showRequests = section === 'requests' || (isCompany && section === 'overview');
+  const showSchedule = !isCompany && section === 'schedule';
+  const showMetrics = (isCompany && section === 'overview') || (!isCompany && section === 'requests');
   const allowed = isCompany ? company.role === 'admin' || company.role === 'dispatcher' : company.role === 'technician';
   const [cursor, setCursor] = useState('');
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState(isCompany ? 'recent' : 'appointment');
-  const list = useLoad<RequestPage>(session.signedIn && allowed ? api + '/requests?view=staff'
+  const list = useLoad<RequestPage>(session.signedIn && allowed && (showRequests || showSchedule) ? api + '/requests?view=staff'
     + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') + (query ? '&q=' + encodeURIComponent(query) : '') : undefined);
-  const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany ? api + '/technicians' : undefined);
+  const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany && section === 'technicians' ? api + '/technicians' : undefined);
   const result = list.data?.items ?? [];
   const today = berlinDay(new Date());
   const daily = result.filter(row => row.appointment && berlinDay(row.appointment.startsAt) === today)
@@ -323,21 +420,26 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
     <a href={login + '&mode=workforce'} className="primary">Anmelden</a></Panel>;
   if (!allowed) return <Panel><h1>Zugang zum Arbeitsbereich</h1><Notice text="Ihr Konto hat keinen Zugriff auf diesen Bereich."/></Panel>;
   return <>
-    <div id="overview" className="workspace-heading"><p className="eyebrow">{company.name}</p>
-      <h1>{isCompany ? 'Serviceübersicht' : 'Meine Einsätze'}</h1>
-      <p>{isCompany ? 'Anfragen, Disposition und Kommunikation an einem Ort.' : 'Dein Tagesplan, deine Aufträge und Nachrichten.'}</p>
+    <div className="workspace-heading"><p className="eyebrow">{company.name}</p>
+      <h1>{isCompany ? ({
+        overview: 'Serviceübersicht', requests: 'Servicevorgänge', technicians: 'Techniker',
+        team: 'Team und Rechte', integrations: 'Integrationen', conversations: 'Unternehmenschat',
+      } as Record<string,string>)[section] || 'Servicebetrieb'
+        : ({ requests: 'Meine Einsätze', schedule: 'Tagesplan', conversations: 'Teamchat' } as Record<string,string>)[section] || 'Technik'}</h1>
+      <p>{isCompany ? 'Servicevorgänge, Disposition und Teamarbeit — klar organisiert.'
+        : 'Deine Einsätze, Termine und Nachrichten an einem Ort.'}</p>
     </div>
-    {list.data && <div className="workspace-metrics" aria-label="Vorgänge in dieser Ansicht">
+    {showMetrics && list.data && <div className="workspace-metrics" aria-label="Vorgänge in dieser Ansicht">
       <div><ClipboardList aria-hidden/><span>{isCompany ? 'Vorgänge' : 'Zugewiesene Einsätze'}</span><strong>{result.length}</strong></div>
       <div><CalendarDays aria-hidden/><span>Heute geplant</span><strong>{daily.length}</strong></div>
       <div><Activity aria-hidden/><span>In Arbeit</span><strong>{result.filter(r => r.state === 'in_progress').length}</strong></div>
     </div>}
-    {!isCompany && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
+    {showSchedule && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
       {daily.length === 0 && <p className="muted">Heute sind in dieser Ansicht keine Termine geplant.</p>}
       <ol>{daily.map(row => <li key={row.id}><time dateTime={row.appointment!.startsAt}>{berlinTime(row.appointment!.startsAt)}</time>
         <a href={detailPath(row)}>{row.title}<small>Bis {berlinTime(row.appointment!.endsAt)} Uhr</small></a></li>)}</ol>
     </section>}
-    <section id="requests" className="panel operations-list">
+    {showRequests && <section id="requests" className="panel operations-list">
       <div className="section-line"><h2>{isCompany ? 'Servicevorgänge' : 'Zugewiesene Aufträge'}</h2></div>
       <form className="workspace-filters" onSubmit={e => {e.preventDefault(); setCursor(''); setFilter(''); setQuery(search.trim());}}>
         <label>Vorgang suchen<input type="search" value={search} maxLength={160} placeholder="Titel eingeben" onChange={e => {
@@ -365,14 +467,15 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       </li>)}</ul>}
       {list.data?.nextCursor && <button onClick={() => setCursor(list.data!.nextCursor!)}>Weitere Vorgänge</button>}
       {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-    </section>
-    {isCompany && <section id="technicians" className="panel"><h2>Techniker</h2><Notice text={technicians.error}/>
+    </section>}
+    {isCompany && section === 'technicians' && <section id="technicians" className="panel"><h2>Techniker</h2><Notice text={technicians.error}/>
       {!technicians.data && !technicians.error && <p role="status">Techniker werden geladen …</p>}
       {technicians.data?.length === 0 && <p className="muted">Aktuell sind keine Techniker zuweisbar.</p>}
       {technicians.data && <ul className="staff-directory">{technicians.data.map(tech => <li key={tech.id}><UserRound aria-hidden/>{tech.name}</li>)}</ul>}
     </section>}
-    {isCompany && company.role === 'admin' && <><Team api={api} session={session}/><IntegrationInbox/></>}
-    <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>
+    {isCompany && company.role === 'admin' && section === 'team' && <Team api={api} session={session}/>}
+    {isCompany && company.role === 'admin' && section === 'integrations' && <IntegrationInbox/>}
+    {section === 'conversations' && <div id="conversations"><Chat session={session} channel="company" title="Unternehmenschat"/></div>}
   </>;
 }
 

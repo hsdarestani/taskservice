@@ -36,6 +36,7 @@ jobs:
           cache: npm
           cache-dependency-path: v2/web/package-lock.json
       - run: npm ci --prefix v2/web
+      - run: npm run --prefix v2/web test:access
       - run: npm run --prefix v2/web build
       - uses: actions/setup-python@v5
         with:
@@ -49,6 +50,14 @@ jobs:
           TASKSERVICE_INVOICE_BROWSER: ${{ github.workspace }}/v2/tests/invoice_browser.py
           TASKSERVICE_BROWSER_WEBROOT: ${{ github.workspace }}/v2/web/dist
           TASKSERVICE_BROWSER_OUTPUT: ${{ runner.temp }}/taskservice-browser
+      - name: Save browser QA screenshots for visual approval
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: taskservice-one-browser-qa
+          path: ${{ runner.temp }}/taskservice-browser/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Restore a disposable PostgreSQL backup
         run: bash v2/ops/restore-smoke.sh
         env:

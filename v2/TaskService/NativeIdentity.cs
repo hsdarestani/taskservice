@@ -18,6 +18,7 @@ public static class NativeIdentity
 {
     internal const string Issuer = "urn:taskservice:local:v1";
     internal const string MfaAssurance = "local-totp";
+    internal const string DemoPasswordOnlyAssurance = "demo-password-only";
     private const string SessionClaim = "ts:session";
     private const string RecoveryMessage = "Diese Funktion ist in der Demoversion noch nicht verfügbar.";
     private static readonly SemaphoreSlim PasswordSlots = new(2);
@@ -28,6 +29,10 @@ public static class NativeIdentity
 
     internal static bool Enabled(IConfiguration config) => config["Identity:Mode"] == "native";
     internal static bool Demo(IConfiguration config) => config.GetValue<bool>("Demo:Enabled");
+    // Deliberately limited to synthetic demo accounts; never applies to real staff or customers.
+    internal static bool DemoPasswordOnly(IConfiguration config, string? email) =>
+        Demo(config) && config.GetValue<bool>("Identity:DemoPasswordOnly") &&
+        email is not null && email.EndsWith("@taskservice-demo.invalid", StringComparison.OrdinalIgnoreCase);
     internal static bool MailHeld(IConfiguration config) => config["Mail:DeliveryMode"] == "disabled";
     internal static bool RecoveryAvailable(IConfiguration config) => config["Identity:RecoveryMode"] == "external" &&
         Uri.TryCreate(config["Identity:RecoveryUrl"], UriKind.Absolute, out var uri) &&
@@ -67,7 +72,7 @@ public static class NativeIdentity
     }
 
     private static async Task<IResult> Login(NativeCredentials input, HttpContext http, ServiceDb db,
-        IDataProtectionProvider protection, CancellationToken ct)
+        IDataProtectionProvider protection, IConfiguration config, CancellationToken ct)
     {
         if (!http.Request.IsHttps)
             return ApiProblem.Denied();
@@ -88,10 +93,11 @@ public static class NativeIdentity
 
             var passwordValid = password != PasswordVerificationResult.Failed;
             var allowedRealm = !input.Workforce || account.Workforce;
+            var demoPasswordOnly = input.Workforce && DemoPasswordOnly(config, account.Email);
             long? matchedStep = null;
-            if (input.Workforce && account.TotpCipher is { } encrypted && passwordValid && allowedRealm)
+            if (input.Workforce && !demoPasswordOnly && account.TotpCipher is { } encrypted && passwordValid && allowedRealm)
                 matchedStep = VerifyTotp(protection, encrypted, input.Code, account.LastTotpStep, now);
-            var mfaRequired = input.Workforce && account.TotpCipher is not null;
+            var mfaRequired = input.Workforce && account.TotpCipher is not null && !demoPasswordOnly;
             if (!passwordValid || !allowedRealm || mfaRequired && matchedStep is null)
             {
                 if (account.LockUntil is not null)
@@ -126,9 +132,11 @@ public static class NativeIdentity
                 new("ts:realm", input.Workforce ? IdentitySessions.WorkforceClaim : "customer"),
                 new("email", account.Email), new("email_verified", "false")
             ];
-            if (input.Workforce && matchedStep is not null)
+            if (input.Workforce && (matchedStep is not null || demoPasswordOnly))
             {
-                claims.Add(new(IdentitySessions.AssuranceClaim, MfaAssurance));
+                // Never label password-only access as verified MFA.
+                claims.Add(new(IdentitySessions.AssuranceClaim,
+                    demoPasswordOnly ? DemoPasswordOnlyAssurance : MfaAssurance));
                 if (account.PlatformAdmin)
                     claims.Add(new("taskservice_role", "platform_admin"));
             }

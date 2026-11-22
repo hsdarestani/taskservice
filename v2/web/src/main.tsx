@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, ArrowLeft, Building2, CalendarDays, ChevronRight, ClipboardList, FileText, History, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, Receipt, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, ArrowLeft, Building2, CalendarDays, ChevronRight, ClipboardList, FileText, History, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, Receipt, ShieldCheck, UploadCloud, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
@@ -739,7 +739,7 @@ function ReportForm({ url, data, session, refresh }: { url: string; data: Report
       <label>Material <small>Falls Material verwendet wurde.</small><textarea name="materials" rows={2} defaultValue={template?.materials} maxLength={2000}/></label>
     </>}
     {action === 'reject' && <label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>}
-    <button className="primary" disabled={busy}>{busy ? 'Wird gespeichert …' : reportActions[action]}</button>
+    <button className={['revoke','reject'].includes(action) ? 'primary ts-danger-action' : 'primary'} disabled={busy}>{busy ? 'Wird gespeichert …' : reportActions[action]}</button>
     <Notice text={error}/>
   </form>;
 }
@@ -825,13 +825,14 @@ function InvoiceRow({ invoice, url, session, refresh }: { invoice: InvoiceItem; 
       {action === 'upload' ? <InvoiceUploadForm url={url} invoice={invoice} session={session} refresh={refresh}/> :
         <form onSubmit={change}>
           {action === 'reject' && <label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>}
-          <button className="primary" disabled={busy}>{invoiceActions[action]}</button>
+          <button className={['revoke','reject'].includes(action) ? 'primary ts-danger-action' : 'primary'} disabled={busy}>{invoiceActions[action]}</button>
         </form>}
     </>}
   </div>;
 }
 
 function InvoiceUploadForm({ url, invoice, session, refresh }: { url: string; invoice?: InvoiceItem; session: Session; refresh: () => void }) {
+  const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   async function upload(e: FormEvent<HTMLFormElement>) {
@@ -845,10 +846,22 @@ function InvoiceUploadForm({ url, invoice, session, refresh }: { url: string; in
     } catch (x) { setError((x as Error).message); }
     finally { setBusy(false); }
   }
-  return <form onSubmit={upload}>
-    <label>{invoice ? 'Korrigiertes Original' : 'Rechnungsoriginal'} <small>PDF oder XML bis 10 MB.</small>
-      <input type="file" name="invoice" accept=".pdf,.xml" required/></label>
-    <button className="primary" disabled={busy}>{busy ? 'Wird hochgeladen …' : 'Datei hochladen'}</button>
+  return <form onSubmit={upload} className="ts-document-upload-form">
+    <label className="ts-upload-field">
+      <span className="ts-upload-caption">{invoice ? 'Korrigiertes Original' : 'Rechnungsoriginal'}
+        <small>PDF oder XML · Maximal 10 MB</small>
+      </span>
+      <span className="ts-upload-visual">
+        <span className="ts-upload-icon"><UploadCloud size={22} aria-hidden/></span>
+        <span className="ts-upload-copy"><strong>{fileName || 'Datei auswählen'}</strong>
+          <small>{fileName ? 'Andere Datei auswählen' : 'Zum Hochladen klicken oder Datei auswählen'}</small>
+        </span>
+        <span className="ts-upload-pill">Durchsuchen</span>
+      </span>
+      <input type="file" className="ts-upload-native" name="invoice" accept=".pdf,.xml" required
+        onChange={event => setFileName(event.target.files?.[0]?.name || '')}/>
+    </label>
+    <button className="primary" disabled={busy || !fileName}>{busy ? 'Wird hochgeladen …' : 'Datei hochladen'}</button>
     <Notice text={error}/>
   </form>;
 }
@@ -906,7 +919,7 @@ function Commands({ row, session, refresh }: { row: Detail; session: Session; re
     {action === 'arrival' && <label>Anfahrt<select aria-label="Anfahrt" name="arrivalStatus">
       <option value="departed">Unterwegs</option><option value="delayed">Verspätet</option><option value="arrived">Vor Ort</option>
     </select></label>}
-    <button className="primary" disabled={busy}>{action === 'confirm_appointment' ? 'Termin bestätigen' : 'Änderung speichern'}</button><Notice text={error || technicians.error}/>
+    <button className={['cancel','reopen'].includes(action) ? 'primary ts-danger-action' : 'primary'} disabled={busy}>{action === 'confirm_appointment' ? 'Termin bestätigen' : 'Änderung speichern'}</button><Notice text={error || technicians.error}/>
   </form></Panel>;
 }
 

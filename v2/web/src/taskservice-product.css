@@ -303,7 +303,7 @@ details summary {cursor:pointer;}
  .consumer .featured-services h2 {font-size:23px;}
  .consumer .feature-grid {grid-template-columns:1fr;}
  .consumer .feature-card img {height:178px;}
- ..consumer .customer-benefits {margin-top:42px;grid-template-columns:1fr;padding:20px;gap:19px;}
+ .consumer .customer-benefits {margin-top:42px;grid-template-columns:1fr;padding:20px;gap:19px;}
  .consumer .customer-benefits > div {display:grid;grid-template-columns:43px 1fr;gap:3px 11px;}
  .consumer .customer-benefits svg {grid-row:span 2;margin:0;}
  .consumer .customer-benefits p {margin:0;}

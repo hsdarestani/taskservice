@@ -36,6 +36,7 @@ jobs:
           cache: npm
           cache-dependency-path: v2/web/package-lock.json
       - run: npm ci --prefix v2/web
+      - run: npm run --prefix v2/web test:access
       - run: npm run --prefix v2/web build
       - uses: actions/setup-python@v5
         with:

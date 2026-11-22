@@ -25,6 +25,8 @@ with sync_playwright() as playwright:
         extra_http_headers={"X-Test-Subject": "platform-admin", "X-Test-Mfa": "1"})
     platform_page = platform.new_page()
     platform_page.goto(origin + "/plattform", wait_until="domcontentloaded")
+    expect(platform_page.get_by_role("heading", name="Plattformübersicht")).to_be_visible()
+    platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
     setup = platform_page.locator("section").filter(has=platform_page.get_by_role("heading", name="Neues Unternehmen"))
     # The new design keeps provisioning collapsed until explicitly requested.
     setup.locator("details.company-create > summary").click()
@@ -49,7 +51,13 @@ with sync_playwright() as playwright:
     for width, height in ((390, 844), (768, 1024), (1366, 900)):
         platform_page.set_viewport_size({"width": width, "height": height})
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
+        platform_page.screenshot(path=output / f"platform-companies-{width}.png")
+        platform_page.get_by_role("link", name="Übersicht", exact=True).click()
+        expect(platform_page.get_by_role("heading", name="Plattformübersicht")).to_be_visible()
+        assert platform_page.evaluate("document.documentElement.scrollWidth") <= width
         platform_page.screenshot(path=output / f"platform-dashboard-{width}.png")
+        platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
+        expect(platform_page.get_by_role("heading", name="Unternehmen", exact=True).first).to_be_visible()
     platform.close()
 
     for role, route, heading in (
@@ -76,6 +84,8 @@ with sync_playwright() as playwright:
                 desk_page.get_by_label("Vorgang suchen").clear()
                 expect(desk_page.get_by_role("link", name="Testvorgang", exact=False).first).to_be_visible()
                 if width == 1366:
+                    desk_page.screenshot(path=output / "betrieb-overview-desktop.png")
+                    desk_page.get_by_role("link", name="Team und Rechte", exact=True).click()
                     team = desk_page.locator("#team")
                     team.get_by_label("Name", exact=True).fill("Test Teammitglied")
                     team.get_by_label("Geschäftliche E-Mail-Adresse").fill("browser-staff@example.invalid")

@@ -26,6 +26,8 @@ with sync_playwright() as playwright:
     platform_page = platform.new_page()
     platform_page.goto(origin + "/plattform", wait_until="domcontentloaded")
     setup = platform_page.locator("section").filter(has=platform_page.get_by_role("heading", name="Neues Unternehmen"))
+    # The new design keeps provisioning collapsed until explicitly requested.
+    setup.locator("details.company-create > summary").click()
     slug = "qa-browser-" + os.environ["TASKSERVICE_BROWSER_REQUEST"][:8]
     setup.get_by_label("Portaladresse", exact=False).fill(slug)
     setup.get_by_label("Unternehmensname").fill("Servicewerkstatt Browserprüfung")
@@ -33,9 +35,10 @@ with sync_playwright() as playwright:
         response.request.method == "POST") as creation:
         setup.get_by_role("button", name="Unternehmen anlegen").click()
     assert creation.value.status == 201, (creation.value.status, creation.value.text())
-    company = platform_page.get_by_text("Servicewerkstatt Browserprüfung · Aktiv", exact=True)
+    company = platform_page.locator("details.company-record").filter(
+        has=platform_page.get_by_text("Servicewerkstatt Browserprüfung", exact=True))
     expect(company).to_be_visible()
-    company.click()
+    company.locator("summary").click()
     platform_page.get_by_role("button", name="Ersteinrichtung anzeigen").click()
     platform_page.get_by_label("Name der Administration").fill("Test Administration")
     platform_page.get_by_label("E-Mail-Adresse der Administration").fill("browser-initial@example.invalid")

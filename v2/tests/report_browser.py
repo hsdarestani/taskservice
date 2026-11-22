@@ -47,7 +47,10 @@ with sync_playwright() as playwright:
     with platform_page.expect_response(lambda r: r.url.endswith("/setup") and r.request.method == "POST") as onboarding:
         platform_page.get_by_role("button", name="Erste Einladung erstellen").click()
     assert onboarding.value.status == 201
+    # Invitations are audited in their own dedicated section, not appended below the company editor.
+    platform_page.get_by_role("link", name="Änderungsprotokoll", exact=True).click()
     expect(platform_page.get_by_text("Erste Administration eingeladen", exact=True)).to_be_visible()
+    platform_page.get_by_role("link", name="Unternehmen", exact=True).click()
     for width, height in ((390, 844), (768, 1024), (1366, 900)):
         platform_page.set_viewport_size({"width": width, "height": height})
         assert platform_page.evaluate("document.documentElement.scrollWidth") <= width

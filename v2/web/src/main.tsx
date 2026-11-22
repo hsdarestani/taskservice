@@ -176,6 +176,13 @@ function Workspace({ portal, company, signedIn, logout, children }: {
     <aside className="workspace-sidebar" aria-label={workspaceLabels[portal]}>
       <div className="workspace-brand"><Wordmark href={root}/><span className="workspace-brand-mark">ONE</span></div>
       <p className="workspace-label">{workspaceLabels[portal]}</p>
+      <div className="workspace-mobile-choose">
+        <label htmlFor="workspace-section">Bereich auswählen</label>
+        <select id="workspace-section" value={activeSection}
+          onChange={event => location.assign(root + '#' + event.currentTarget.value)}>
+          {menu.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </div>
       <nav aria-label="Arbeitsbereiche">
         {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && activeSection === item.id ? 'page' : undefined}>
           <item.icon size={19} aria-hidden/><span>{item.name}</span>

@@ -109,6 +109,23 @@ with sync_playwright() as playwright:
             desk_page.screenshot(path=output / f"{route}-dashboard-{width}.png")
             desk.close()
 
+    # A valid session of a different role must not expose another workspace shell.
+    for actor, denied_route in (
+        ("tech-a", "/unternehmen/lab/betrieb"),
+        ("admin-a", "/unternehmen/lab/technik"),
+        ("customer-a", "/unternehmen/lab/betrieb"),
+        ("admin-a", "/plattform"),
+    ):
+        context = browser.new_context(viewport={"width": 390, "height": 844}, ignore_https_errors=True,
+            extra_http_headers={"X-Test-Subject": actor, "X-Test-Mfa": "1"})
+        denied_page = context.new_page()
+        denied_page.goto(origin + denied_route, wait_until="domcontentloaded")
+        expect(denied_page.get_by_role("heading", name="Kein Zugriff auf diesen Bereich")).to_be_visible()
+        expect(denied_page.locator(".workspace-sidebar")).to_have_count(0)
+        expect(denied_page.locator(".workspace-mobile-choose")).to_have_count(0)
+        assert denied_page.evaluate("document.documentElement.scrollWidth") <= 390
+        context.close()
+
     def open_as(subject, privileged=False, mobile=False):
         headers = {"X-Test-Subject": subject}
         if privileged:

@@ -208,28 +208,52 @@ const platformAction: Record<string, string> = {
 };
 
 function Platform({ session }: { session: Session }) {
+  const section = useContext(WorkspaceSectionContext);
   const [reload, setReload] = useState(0);
   const [cursor, setCursor] = useState('');
   const [auditCursor, setAuditCursor] = useState<{ id: string; before: string }>();
   const overview = useLoad<{ items: PlatformCompany[]; nextCursor?: string }>(session.signedIn
     ? platformApi + '/overview' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '') : undefined, reload);
-  const audit = useLoad<{ items: PlatformAuditEntry[]; next?: { id: string; before: string } }>(overview.data
+  const audit = useLoad<{ items: PlatformAuditEntry[]; next?: { id: string; before: string } }>(overview.data && section === 'audit'
     ? platformApi + '/audit' + (auditCursor ? '?' + new URLSearchParams({ cursor: auditCursor.id, before: auditCursor.before }) : '') : undefined, reload);
   const refresh = () => { setCursor(''); setAuditCursor(undefined); setReload(x => x + 1); };
   return <>
-    <div id="overview" className="workspace-heading"><p className="eyebrow">TaskService</p><h1>Plattformverwaltung</h1>
-      <p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
+    <div className="workspace-heading"><p className="eyebrow">TaskService / Plattform</p>
+      <h1>{section === 'companies' ? 'Unternehmen' : section === 'audit' ? 'Änderungsprotokoll' : 'Plattformübersicht'}</h1>
+      <p>{section === 'companies' ? 'Servicebetriebe, Zugänge und Marken an einem Ort verwalten.'
+        : section === 'audit' ? 'Sicher nachvollziehen, was auf der Plattform geändert wurde.'
+        : 'Alle Servicebetriebe und ihre Aktivität im Blick behalten.'}</p>
+    </div>
     {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Verwaltungskonto.</p>
       <a className="primary" href={login + '&mode=workforce'}>Zur Anmeldung</a></Panel>}
     <Notice text={overview.error}/>
     {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}
     {overview.data && <>
-      <div className="workspace-metrics" aria-label="Unternehmen in dieser Ansicht">
+      {section === 'overview' && <><div className="workspace-metrics" aria-label="Unternehmen in dieser Ansicht">
         <div><Building2 aria-hidden/><span>Unternehmen</span><strong>{overview.data.items.length}</strong></div>
         <div><Activity aria-hidden/><span>Aktive Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'active').length}</strong></div>
         <div><ShieldCheck aria-hidden/><span>Gesperrte Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'suspended').length}</strong></div>
       </div>
-      <div className="platform-company-grid" id="companies">
+      <div className="platform-overview-grid">
+        <Panel><div className="section-line"><h2>Aktuelle Unternehmen</h2>
+          <a className="text-link" href="/plattform#companies">Alle verwalten</a></div>
+          <div className="platform-quick-list">{overview.data.items.slice(0, 5).map(item =>
+            <div key={item.slug} className="platform-quick-row">
+              <span className="company-avatar" aria-hidden>{item.name.slice(0,1).toUpperCase()}</span>
+              <span className="company-record-info"><strong>{item.name}</strong><small>/unternehmen/{item.slug}</small></span>
+              <span className={'company-status company-status-' + item.lifecycle}>{companyState[item.lifecycle]}</span>
+            </div>)}</div>
+          {overview.data.items.length === 0 && <p className="muted">Noch keine Unternehmen angelegt.</p>}
+        </Panel>
+        <Panel><h2>Verwaltungszentrale</h2>
+          <p className="muted">Unternehmen verwalten, neue Portale anlegen und Änderungen sicher nachverfolgen.</p>
+          <div className="platform-quick-actions">
+            <a href="/plattform#companies"><Building2 size={18} aria-hidden/>Unternehmen verwalten<ChevronRight size={16} aria-hidden/></a>
+            <a href="/plattform#audit"><ShieldCheck size={18} aria-hidden/>Änderungen prüfen<ChevronRight size={16} aria-hidden/></a>
+          </div>
+        </Panel>
+      </div></>}
+      {section === 'companies' && <div className="platform-company-grid" id="companies">
         <Panel>
           <div className="section-line platform-section-title"><div><h2>Unternehmen</h2>
             <p className="muted">Alle Portale, Zugänge und Marken an einem Ort.</p></div>
@@ -261,8 +285,8 @@ function Platform({ session }: { session: Session }) {
             <CompanyEditor session={session} refresh={refresh}/>
           </details>
         </Panel>
-      </div>
-      <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
+      </div>}
+      {section === 'audit' && <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
         {audit.data?.items.length === 0 && <p className="muted">Es sind noch keine Änderungen erfasst.</p>}
         {audit.data && <ul className="rows">{audit.data.items.map(row => <li key={row.id}>
           <span><strong>{platformAction[row.action]}</strong><small>{row.slug}</small>
@@ -271,7 +295,7 @@ function Platform({ session }: { session: Session }) {
         </li>)}</ul>}
         {audit.data?.next && <button onClick={() => setAuditCursor(audit.data!.next)}>Ältere Änderungen</button>}
         {auditCursor && <button onClick={() => setAuditCursor(undefined)}>Neueste Änderungen</button>}
-      </Panel></div>
+      </Panel></div>}
     </>}
   </>;
 }

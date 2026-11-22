@@ -174,7 +174,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
     addEventListener('hashchange', listener);
     return () => removeEventListener('hashchange', listener);
   }, [defaultSection]);
-  return <div className={'workspace workspace-' + portal}>
+  return <div className={'workspace workspace-' + portal + (requestId ? ' workspace-detail' : '')}>
     <aside className="workspace-sidebar" aria-label={workspaceLabels[portal]}>
       <div className="workspace-brand"><Wordmark href={root}/><span className="workspace-brand-mark">ONE</span></div>
       <p className="workspace-label">{workspaceLabels[portal]}</p>

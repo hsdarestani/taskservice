@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
@@ -124,6 +124,8 @@ function App() {
   </>;
 }
 
+// The active workspace section is a real view, not a scroll target in an endless page.
+const WorkspaceSectionContext = createContext('overview');
 const workspaceLabels = { platform: 'Plattformverwaltung', company: 'Servicebetrieb', technician: 'Technik' };
 const workspaceMenus = {
   platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
@@ -164,6 +166,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
   const menu = workspaceMenus[portal].filter(item => permitted.includes(item.id));
   const defaultSection = menu[0].id;
   const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
+  const activeSection = menu.some(item => item.id === hash) ? hash : defaultSection;
   useEffect(() => {
     const listener = () => setHash(location.hash.slice(1) || defaultSection);
     addEventListener('hashchange', listener);
@@ -174,7 +177,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
       <div className="workspace-brand"><Wordmark href={root}/><span className="workspace-brand-mark">ONE</span></div>
       <p className="workspace-label">{workspaceLabels[portal]}</p>
       <nav aria-label="Arbeitsbereiche">
-        {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && hash === item.id ? 'location' : undefined}>
+        {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && activeSection === item.id ? 'page' : undefined}>
           <item.icon size={19} aria-hidden/><span>{item.name}</span>
         </a>)}
       </nav>
@@ -188,7 +191,7 @@ function Workspace({ portal, company, signedIn, logout, children }: {
           {signedIn && <button className="workspace-signout" onClick={logout}><LogOut size={16} aria-hidden/><span>Abmelden</span></button>}
         </div>
       </header>
-      <main id="inhalt" className="workspace-main">{children}</main>
+      <main id="inhalt" className="workspace-main"><WorkspaceSectionContext.Provider value={activeSection}>{children}</WorkspaceSectionContext.Provider></main>
     </div>
   </div>;
 }

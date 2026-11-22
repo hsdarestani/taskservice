@@ -4,14 +4,16 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, Building2, CalendarDays, ClipboardList, LayoutDashboard, MessagesSquare, Plug, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, Building2, CalendarDays, ChevronRight, ClipboardList, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
+import { navigationForRole, resolveWorkspaceAccess } from './workspaceAccess';
 import { NativeLogin } from './NativeLogin';
 import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
 import './portal.css';
+import './taskservice-one.css';
 
 const states: Record<string, string> = {
   received: 'Eingegangen', verified: 'Bestätigt', under_review: 'In Prüfung',
@@ -53,6 +55,9 @@ type Portal = 'customer' | 'company' | 'technician' | 'platform';
 function App() {
   const session = useLoad<Session>('/api/v1/session');
   const company = useLoad<Company>(slug ? api : undefined, session.data?.signedIn ? 1 : 0);
+  // Authorization is checked with the real platform API before any platform UI is mounted.
+  const platformProbe = useLoad<{ items: PlatformCompany[] }>(
+    path[0] === 'plattform' && session.data?.signedIn ? '/api/v1/platform/overview' : undefined);
   const role = company.data?.role;
   const requestedView = new URLSearchParams(location.search).get('ansicht');
   const staffDetail = requestId && !isClaimLink && requestedView !== 'konto';
@@ -61,6 +66,8 @@ function App() {
     : path[2] === 'betrieb' || staffDetail && (requestedView === 'betrieb' || role === 'admin' || role === 'dispatcher') ? 'company'
     : 'customer';
   const atCustomerHome = portal === 'customer' && !path[2] && Boolean(slug);
+  const workspaceAccess = resolveWorkspaceAccess(portal, !!session.data?.signedIn, role,
+    { ready: !!platformProbe.data, error: platformProbe.error });
   const catalog = useLoad<ServiceCategory[]>(atCustomerHome ? api + '/catalog' : undefined);
   useEffect(() => {
     const accent = company.data?.accent;
@@ -76,10 +83,7 @@ function App() {
     catch { location.reload(); }
   }
   const demoBanner = session.data.demo && <aside className="demo-bar" aria-label="Demoversion">
-    <strong>DEMO</strong> Bitte nur Testdaten eingeben.
-    {session.data.mailEnabled === false && ' E-Mail-Versand ist deaktiviert.'}
-    {base && <nav aria-label="Demo-Bereiche"><a href={base + '/betrieb'}>Betrieb</a>
-      <a href={base + '/technik'}>Technik</a><a href="/plattform">Plattform</a></nav>}
+    <strong>DEMO</strong><span>Nur Testdaten verwenden.{session.data.mailEnabled === false && ' E-Mail-Versand ist deaktiviert.'}</span>
   </aside>;
   if (path[0] === 'anmelden' && session.data.native) return <>{demoBanner}
     <header className="bar"><Wordmark href="/"/></header>
@@ -90,6 +94,10 @@ function App() {
       <p>Verwende ausschließlich Testdaten. Gib keine echten Kundendaten, vertraulichen Informationen oder privaten Dokumente ein.</p>
       <p>Die Demo speichert die Anmeldedaten deines Testkontos, geschützte Sitzungsschlüssel sowie die von dir erstellten Testanfragen.</p>
     </Panel></main></>;
+  if (portal !== 'customer' && workspaceAccess !== 'allowed') return <>{demoBanner}
+    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name}
+      detail={workspaceAccess === 'denied' && platformProbe.error !== 'Zugriff verweigert.' ? platformProbe.error : undefined}/>
+  </>;
   if (atCustomerHome && company.data) return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
     <CustomerHome base={base} api={api} company={company.data} session={session.data}
@@ -128,11 +136,32 @@ const workspaceMenus = {
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
 };
 
+function WorkspaceGate({ portal, access, companyName, detail }: {
+  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied'; companyName?: string; detail?: string;
+}) {
+  const heading = access === 'sign-in' ? 'Im Arbeitsbereich anmelden'
+    : access === 'checking' ? 'Zugriff wird geprüft' : 'Kein Zugriff auf diesen Bereich';
+  const destination = access === 'sign-in' ? login + '&mode=workforce' : (base || '/');
+  const message = access === 'sign-in' ? 'Melde dich mit deinem Arbeitskonto an, um den Bereich zu öffnen.'
+    : access === 'checking' ? 'Deine Berechtigungen werden sicher überprüft.'
+    : 'Dein Konto hat für diesen Arbeitsbereich keine Berechtigung.';
+  return <div className="workspace-gate">
+    <header className="workspace-gate-top"><Wordmark href={base || '/'}/><span>{companyName || workspaceLabels[portal]}</span></header>
+    <main id="inhalt" className="workspace-gate-main"><div className="workspace-gate-card">
+      <div className="workspace-gate-icon"><LockKeyhole size={25} aria-hidden/></div>
+      <p className="eyebrow">Sicherer Arbeitsbereich</p><h1>{heading}</h1><p>{message}</p>
+      {access === 'denied' && detail && !detail.toLowerCase().includes('forbidden') && <p className="muted">Der Zugriff konnte nicht bestätigt werden.</p>}
+      {access !== 'checking' && <a className="primary" href={destination}>{access === 'sign-in' ? 'Zur Anmeldung' : 'Zum Serviceportal'}</a>}
+    </div></main>
+  </div>;
+}
+
 function Workspace({ portal, company, signedIn, logout, children }: {
   portal: Exclude<Portal, 'customer'>; company?: Company; signedIn: boolean; logout: () => Promise<void>; children: ReactNode;
 }) {
   const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
-  const menu = workspaceMenus[portal].filter(item => !['team', 'integrations'].includes(item.id) || company?.role === 'admin');
+  const permitted = navigationForRole(portal, company?.role);
+  const menu = workspaceMenus[portal].filter(item => permitted.includes(item.id));
   const defaultSection = menu[0].id;
   const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
   useEffect(() => {
@@ -141,19 +170,23 @@ function Workspace({ portal, company, signedIn, logout, children }: {
     return () => removeEventListener('hashchange', listener);
   }, [defaultSection]);
   return <div className={'workspace workspace-' + portal}>
-    <aside className="workspace-sidebar">
-      <Wordmark href={root}/><p className="workspace-label">{workspaceLabels[portal]}</p>
+    <aside className="workspace-sidebar" aria-label={workspaceLabels[portal]}>
+      <div className="workspace-brand"><Wordmark href={root}/><span className="workspace-brand-mark">ONE</span></div>
+      <p className="workspace-label">{workspaceLabels[portal]}</p>
       <nav aria-label="Arbeitsbereiche">
         {menu.map(item => <a key={item.id} href={root + '#' + item.id} aria-current={!requestId && hash === item.id ? 'location' : undefined}>
           <item.icon size={19} aria-hidden/><span>{item.name}</span>
         </a>)}
       </nav>
+      <div className="workspace-sidebar-bottom"><ShieldCheck size={15} aria-hidden/>Geschützter Arbeitsbereich</div>
     </aside>
     <div className="workspace-content">
       <header className="workspace-top">
-        <div>{portal === 'technician' && <Wordmark href={root}/>}<strong>{company?.name || 'TaskService'}</strong>
-          <small>{workspaceLabels[portal]}</small></div>
-        {signedIn ? <button className="text-button" onClick={logout}>Abmelden</button> : <a href={login + '&mode=workforce'}>Anmelden</a>}
+        <div className="workspace-breadcrumb"><span>TaskService</span><ChevronRight size={14} aria-hidden/>
+          <strong>{company?.name || workspaceLabels[portal]}</strong></div>
+        <div className="workspace-top-actions"><span className="workspace-role-tag">{portal === 'platform' ? 'Plattformadmin' : company?.role === 'dispatcher' ? 'Prüfung' : portal === 'technician' ? 'Technik' : 'Administration'}</span>
+          {signedIn && <button className="workspace-signout" onClick={logout}><LogOut size={16} aria-hidden/><span>Abmelden</span></button>}
+        </div>
       </header>
       <main id="inhalt" className="workspace-main">{children}</main>
     </div>
@@ -183,7 +216,7 @@ function Platform({ session }: { session: Session }) {
   return <>
     <div id="overview" className="workspace-heading"><p className="eyebrow">TaskService</p><h1>Plattformverwaltung</h1>
       <p>Unternehmen, Portalzugänge und Änderungen verwalten.</p></div>
-    {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Konto mit Mehrfaktor-Anmeldung.</p>
+    {!session.signedIn && <Panel><h2>Anmelden</h2><p>Für die Verwaltung benötigen Sie ein berechtigtes Verwaltungskonto.</p>
       <a className="primary" href={login + '&mode=workforce'}>Zur Anmeldung</a></Panel>}
     <Notice text={overview.error}/>
     {session.signedIn && !overview.data && !overview.error && <p role="status">Unternehmen werden geladen …</p>}

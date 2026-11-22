@@ -15,6 +15,7 @@ import './styles.css';
 import './portal.css';
 import './taskservice-one.css';
 import './request-detail.css';
+import './taskservice-product.css';
 
 const states: Record<string, string> = {
   received: 'Eingegangen', verified: 'Bestätigt', under_review: 'In Prüfung',
@@ -546,7 +547,6 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
   ];
   const selected = options.some(item => item.id === tab) ? tab : 'overview';
   const back = base + (portal === 'company' ? '/betrieb#requests' : portal === 'technician' ? '/technik#requests' : '/konto');
-  const readyPhotos = row.photos?.filter(photo => photo.scanStatus === 'clean') ?? [];
   const recentHistory = row.history.slice(-4).reverse();
   return <div className="request-workspace">
     <header className="request-workspace-header">

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { CheckCircle2, ClipboardCheck, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { get, send } from './api';
 import type { Session } from './api';
 
@@ -54,7 +55,24 @@ export function NativeLogin({ session }: { session: Session }) {
     }
   }
 
-  return <section className="panel native-login">
+  return <div className="auth-layout">
+    <aside className="auth-benefit" aria-label="Über TaskService">
+      <div className="auth-benefit-mark"><ShieldCheck size={22} aria-hidden/> TaskService One</div>
+      <div className="auth-benefit-main">
+        <span className="auth-benefit-eyebrow">DEIN SERVICEPORTAL</span>
+        <h2>{workforce ? 'Dein Team. Ein zentraler Arbeitsbereich.' : 'Deine Anfragen. Alles im Blick.'}</h2>
+        <p>{workforce ? 'Serviceeinsätze, Dokumentation und Zusammenarbeit übersichtlich organisiert.' :
+          'Behalte den Überblick über Termine, Nachrichten und den Bearbeitungsstand deiner Anliegen.'}</p>
+        <ul>
+          <li><CheckCircle2 size={18} aria-hidden/> Klare Aufgaben und Status</li>
+          <li><ClipboardCheck size={18} aria-hidden/> Alle Vorgänge an einem Ort</li>
+          <li><LockKeyhole size={18} aria-hidden/> Geschützter persönlicher Zugang</li>
+        </ul>
+      </div>
+      <span className="auth-benefit-foot">taskservice. <span>Einfach. Übersichtlich. Direkt.</span></span>
+    </aside>
+    <section className="panel native-login">
+      <div className="auth-form-kicker">{workforce ? 'TEAM-LOGIN' : 'KUNDENZUGANG'}</div>
     <h1>{mode === 'recovery' ? 'Passwort vergessen?' : mode === 'register' ? 'Kundenkonto erstellen'
       : workforce ? 'Im Arbeitsbereich anmelden' : 'Im Kundenkonto anmelden'}</h1>
     {mode === 'register' && <p>Verwende für die Demo eine Testadresse und keine echten Kundendaten.</p>}
@@ -79,5 +97,6 @@ export function NativeLogin({ session }: { session: Session }) {
       }}>Kundenkonto erstellen</button>}
       {mode === 'login' && <button className="text-button" onClick={showRecovery}>Passwort vergessen?</button>}
     </div>
-  </section>;
+    </section>
+  </div>;
 }

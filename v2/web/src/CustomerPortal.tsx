@@ -265,8 +265,11 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
             <label>Dein Anliegen<textarea name="description" value={description} required minLength={10} maxLength={4000}
               rows={5} onChange={event => setDescription(event.target.value)}/></label>
             <label className="photo-drop">
-              <Camera aria-hidden/><strong>Fotos hinzufügen (optional)</strong><small>{fileHelp}</small>
-              <input type="file" aria-label="Fotos auswählen" accept="image/jpeg,image/png,image/webp" multiple
+              <span className="photo-drop-icon"><Camera size={26} aria-hidden/></span>
+              <strong>Fotos hinzufügen (optional)</strong>
+              <small>{fileHelp}</small>
+              <span className="photo-drop-action">Fotos auswählen</span>
+              <input className="photo-drop-native" type="file" aria-label="Fotos auswählen" accept="image/jpeg,image/png,image/webp" multiple
                 onChange={event => { addPhotos(event.target.files); event.target.value = ''; }}/>
             </label>
             {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={index}>

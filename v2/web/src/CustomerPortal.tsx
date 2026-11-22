@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Camera, Check, ClipboardList, Grid2X2, Home, MapPin, Search, UserRound, X } from 'lucide-react';
+import { ArrowRight, Camera, Check, CheckCircle2, ClipboardList, Grid2X2, Home, MapPin, Search, ShieldCheck, Sparkles, UserRound, X } from 'lucide-react';
 import { send } from './api';
 import type { Company, Session } from './api';
 
@@ -75,14 +75,32 @@ export function CustomerHome({ base, api, company, session, categories, catalogE
   return <div className="consumer">
     <CustomerHeader base={base} company={company} onRequest={start} query={query} onQuery={setQuery}/>
     <main id="inhalt" className="consumer-main">
-      <div className="discovery">
-        <section id="services" className="discovery-services" aria-labelledby="services-title">
-          <h1 id="services-title">Services für dein Zuhause</h1>
-          <div className="service-picker" id="service-results">
-            <div className="section-line">
-              <h2>{term ? 'Suchergebnisse' : 'Was brauchst du?'}</h2>
-              {term && <button className="text-button" onClick={() => setQuery('')}>Suche zurücksetzen</button>}
+      <section className="discovery" aria-labelledby="services-title">
+        <div className="discovery-hero">
+          <div className="discovery-hero-copy">
+            <div className="discovery-hero-label"><Sparkles size={15} aria-hidden/> Einfach organisieren. Schnell erledigen.</div>
+            <h1 id="services-title">Services für dein Zuhause</h1>
+            <p>Von der kleinen Reparatur bis zum nächsten großen Projekt: Beschreibe, was du brauchst, und wir leiten deine Anfrage direkt an deinen Servicebetrieb weiter.</p>
+            <div className="discovery-hero-actions">
+              <button className="primary" type="button" onClick={start}>Anfrage erstellen <ArrowRight size={18} aria-hidden/></button>
+              <a className="discovery-explore-link" href="#services"><Grid2X2 size={17} aria-hidden/> Services entdecken</a>
             </div>
+            <div className="discovery-trust"><span><CheckCircle2 size={16} aria-hidden/> Unkompliziert</span>
+              <span><ShieldCheck size={16} aria-hidden/> Direkt zum Servicebetrieb</span></div>
+          </div>
+          <div className="discovery-hero-image"><img src="/services/hero.webp" alt="" width="700" height="660"/>
+            <div className="discovery-hero-image-note"><CheckCircle2 size={20} aria-hidden/>
+              <span><strong>Alles an einem Ort</strong><small>Deine Anfragen jederzeit im Blick</small></span></div>
+          </div>
+        </div>
+        <div className="service-picker" id="services">
+          <div className="service-picker-header">
+            <div><p className="eyebrow">UNSERE LEISTUNGEN</p>
+              <h2>{term ? 'Suchergebnisse' : 'Wobei können wir helfen?'}</h2>
+              <p>Wähle deinen Bereich. Die Details kannst du im nächsten Schritt angeben.</p></div>
+            {term && <button className="text-button" onClick={() => setQuery('')}>Suche zurücksetzen</button>}
+          </div>
+          <div id="service-results">
             {!categories && !catalogError && <p role="status">Services werden geladen …</p>}
             {catalogError && <p className="notice" role="alert">{catalogError}</p>}
             {categories && <p className="sr-only" role="status">{visible.length} Services verfügbar.</p>}
@@ -90,20 +108,12 @@ export function CustomerHome({ base, api, company, session, categories, catalogE
             <div className="service-grid">{visible.map(service =>
               <button key={service.id} className="service-tile" onClick={() => open(service.id)} type="button">
                 <img src={service.image} alt="" width="420" height="270"/>
-                <span>{service.label}</span>
+                <span>{service.label}</span><ArrowRight className="service-tile-arrow" size={18} aria-hidden/>
               </button>
             )}</div>
           </div>
-        </section>
-        <section className="service-promo" aria-labelledby="promo-title">
-          <div className="service-promo-copy">
-            <h2 id="promo-title">Du beschreibst es.<br/>Wir kümmern uns.</h2>
-            <p>Erzähl uns, wobei du Hilfe brauchst. Deine Anfrage geht direkt an den Servicebetrieb.</p>
-            <button className="promo-button" type="button" onClick={start}>Anfrage erstellen</button>
-          </div>
-          <img src="/services/hero.webp" alt="" width="700" height="660"/>
-        </section>
-      </div>
+        </div>
+      </section>
       {featured.length > 0 && <section className="featured-services" aria-labelledby="featured-title">
         <h2 id="featured-title">Weitere Services entdecken</h2>
         <div className="feature-grid">{featured.map(service =>

@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { HubConnectionBuilder, HttpTransportType, LogLevel } from '@microsoft/signalr';
 import { send, sessionUrl, uploadInvoice } from './api';
 import type { Company, Detail, InvoiceItem, InvoiceVersion, Message, ReportView, RequestRow, Session } from './api';
-import { Activity, Building2, CalendarDays, ChevronRight, ClipboardList, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
+import { Activity, Building2, CalendarDays, ChevronRight, ClipboardList, LayoutDashboard, LockKeyhole, LogOut, MessagesSquare, Plug, Plus, ShieldCheck, UserRound, UsersRound } from 'lucide-react';
 import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerPortal';
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
@@ -226,18 +226,39 @@ function Platform({ session }: { session: Session }) {
         <div><Activity aria-hidden/><span>Aktive Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'active').length}</strong></div>
         <div><ShieldCheck aria-hidden/><span>Gesperrte Unternehmen</span><strong>{overview.data.items.filter(x => x.lifecycle === 'suspended').length}</strong></div>
       </div>
-      <div className="platform-company-grid" id="companies"><Panel><h2>Unternehmen</h2>
-        {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
-        <div className="report-history">{overview.data.items.map(item => <details key={item.slug}>
-          <summary>{item.name} · {companyState[item.lifecycle]}</summary>
-          <p>Portaladresse <strong>/unternehmen/{item.slug}</strong></p>
-          {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
-          {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
-            companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
-        </details>)}</div>
-        {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
-        {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
-      </Panel><Panel><h2>Neues Unternehmen</h2><CompanyEditor session={session} refresh={refresh}/></Panel></div>
+      <div className="platform-company-grid" id="companies">
+        <Panel>
+          <div className="section-line platform-section-title"><div><h2>Unternehmen</h2>
+            <p className="muted">Alle Portale, Zugänge und Marken an einem Ort.</p></div>
+            <span className="company-record-count">{overview.data.items.length} erfasst</span>
+          </div>
+          {overview.data.items.length === 0 && <p className="muted">Es wurden noch keine Unternehmen angelegt.</p>}
+          <div className="report-history company-directory">{overview.data.items.map(item =>
+            <details key={item.slug} className="company-record">
+              <summary><span className="company-avatar" aria-hidden>{item.name.slice(0, 1).toUpperCase()}</span>
+                <span className="company-record-info"><strong>{item.name}</strong>
+                  <small>/unternehmen/{item.slug}</small></span>
+                <span className={'company-status company-status-' + item.lifecycle}>{companyState[item.lifecycle]}</span>
+              </summary>
+              <div className="company-record-body">
+                {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
+                {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
+                  companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
+              </div>
+            </details>)}</div>
+          <div className="platform-pagination">
+            {overview.data.nextCursor && <button onClick={() => setCursor(overview.data!.nextCursor!)}>Weitere Unternehmen</button>}
+            {cursor && <button onClick={() => setCursor('')}>Zur ersten Seite</button>}
+          </div>
+        </Panel>
+        <Panel><div className="company-create-heading"><div className="company-create-icon"><Plus size={19} aria-hidden/></div>
+          <div><h2>Neues Unternehmen</h2><p className="muted">Ein neues Serviceportal einrichten.</p></div>
+        </div>
+          <details className="company-create"><summary>Neues Portal erstellen <Plus size={17} aria-hidden/></summary>
+            <CompanyEditor session={session} refresh={refresh}/>
+          </details>
+        </Panel>
+      </div>
       <div id="audit"><Panel><h2>Änderungsprotokoll</h2><Notice text={audit.error}/>
         {audit.data?.items.length === 0 && <p className="muted">Es sind noch keine Änderungen erfasst.</p>}
         {audit.data && <ul className="rows">{audit.data.items.map(row => <li key={row.id}>

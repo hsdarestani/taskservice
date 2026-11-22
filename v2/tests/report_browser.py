@@ -126,7 +126,18 @@ with sync_playwright() as playwright:
         assert denied_page.evaluate("document.documentElement.scrollWidth") <= 390
         context.close()
 
-    def open_as(subject, privileged=False, mobile=False):
+
+    tabs = {"overview": "Überblick", "actions": "Bearbeiten", "report": "Arbeitsbericht",
+            "invoices": "Rechnungen", "messages": "Nachrichten", "internal": "Interne Notizen",
+            "timeline": "Verlauf"}
+
+    def show_tab(page, tab):
+        if page.viewport_size["width"] <= 780:
+            page.get_by_label("Bereich des Servicevorgangs").select_option(tab)
+        else:
+            page.get_by_role("tab", name=tabs[tab], exact=True).click()
+
+    def open_as(subject, privileged=False, mobile=False, tab="report"):
         headers = {"X-Test-Subject": subject}
         if privileged:
             headers["X-Test-Mfa"] = "1"
@@ -141,8 +152,10 @@ with sync_playwright() as playwright:
             path.replace("/lab/anfragen/", "/lab/technik/anfragen/") if subject == "tech-a" else path
         )
         page.goto(origin + workspace_path, wait_until="domcontentloaded")
+        show_tab(page, tab)
         panel = page.locator("section").filter(has=page.get_by_role("heading", name="Arbeitsbericht", exact=True))
-        expect(panel.get_by_role("heading")).to_be_visible()
+        if tab == "report":
+            expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel
 
     def send_request_command(page, action, button_name="Änderung speichern"):
@@ -152,7 +165,7 @@ with sync_playwright() as playwright:
             commands.get_by_role("button", name=button_name, exact=True).click()
         assert response.value.ok, (response.value.status, response.value.text())
 
-    context, page, panel = open_as("admin-a", privileged=True)
+    context, page, panel = open_as("admin-a", privileged=True, tab="actions")
     commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
     commands.get_by_label("Aktion", exact=True).select_option("schedule")
     day = (datetime.now(ZoneInfo("Europe/Berlin")) + timedelta(days=4)).date()
@@ -160,24 +173,30 @@ with sync_playwright() as playwright:
     commands.get_by_label("Ende (Berliner Zeit)").fill(f"{day}T10:00")
     commands.get_by_label("Hinweis für den Kunden").fill("Bitte den Eingang freihalten.")
     send_request_command(page, "schedule")
+    show_tab(page, "overview")
     expect(page.get_by_text("Bitte den Eingang freihalten.", exact=True)).to_be_visible()
     context.close()
 
-    context, page, panel = open_as("customer-a", mobile=True)
+    context, page, panel = open_as("customer-a", mobile=True, tab="actions")
     send_request_command(page, "confirm_appointment", "Termin bestätigen")
+    show_tab(page, "overview")
     expect(page.get_by_text("Bestätigt am", exact=False)).to_be_visible()
     page.locator("section").filter(has=page.get_by_role("heading", name="Einsatztermin", exact=True)).screenshot(
         path=output / "appointment-customer-mobile.png"
     )
     context.close()
 
-    context, page, panel = open_as("tech-a", mobile=True)
+    context, page, panel = open_as("tech-a", mobile=True, tab="actions")
     commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
     commands.get_by_label("Aktion", exact=True).select_option("arrival")
     commands.get_by_label("Anfahrt").select_option("arrived")
     send_request_command(page, "arrival")
+    show_tab(page, "overview")
     expect(page.get_by_text("Vor Ort", exact=True)).to_be_visible()
+    show_tab(page, "actions")
     send_request_command(page, "start")
+    show_tab(page, "report")
+    panel = page.locator("section").filter(has=page.get_by_role("heading", name="Arbeitsbericht", exact=True))
     panel.get_by_label("Tätigkeit 1").fill("Gerät geprüft und Dichtung gewechselt")
     panel.get_by_label("Dauer in Minuten").fill("45")
     panel.get_by_label("Ergebnis").fill("Gerät funktioniert wieder.")

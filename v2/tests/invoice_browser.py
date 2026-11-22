@@ -27,6 +27,10 @@ with sync_playwright() as playwright:
         page = context.new_page()
         workspace_path = path.replace("/lab/anfragen/", "/lab/betrieb/anfragen/") if privileged else path
         page.goto(origin + workspace_path, wait_until="domcontentloaded")
+        if mobile:
+            page.get_by_label("Bereich des Servicevorgangs").select_option("invoices")
+        else:
+            page.get_by_role("tab", name="Rechnungen", exact=True).click()
         panel = page.locator("section").filter(has=page.get_by_role("heading", name="Rechnungen", exact=True))
         expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel

@@ -379,3 +379,9 @@ details summary {cursor:pointer;}
  .ts-upload-pill {padding:8px 9px;font-size:11px;}
  .ts-upload-copy strong {font-size:12px;}
 }
+
+/* Detail routes have their own accessible section chooser; do not stack a second selector above them. */
+@media(max-width:800px){
+  .workspace.workspace-detail:not(.workspace-technician) .workspace-mobile-choose {display:none;}
+  .workspace.workspace-detail:not(.workspace-technician) .workspace-sidebar {padding-bottom:12px;}
+}

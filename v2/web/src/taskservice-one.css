@@ -500,3 +500,26 @@ body { font-family: Inter, "Segoe UI", Arial, system-ui, sans-serif; color: var(
   .workspace:not(.workspace-technician) .workspace-sidebar nav { display: none; }
   .workspace-technician .workspace-mobile-choose { display: none; }
 }
+
+
+/* Platform overview: fast scan and actionable, not a duplicate of the company editor. */
+.workspace .platform-overview-grid {
+  display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(270px, .8fr);
+  gap: 20px; align-items: start;
+}
+.workspace .platform-quick-list { display: grid; margin: 17px 0 0; border-top: 1px solid var(--ts-border); }
+.workspace .platform-quick-row { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 73px; padding: 13px 0; border-bottom: 1px solid var(--ts-border); }
+.workspace .platform-quick-row:last-child { border-bottom: 0; }
+.workspace .platform-quick-row .company-avatar { width: 36px; height: 36px; border-radius: 10px; font-size: 13px; }
+.workspace .platform-quick-actions { display: grid; gap: 10px; margin-top: 24px; }
+.workspace .platform-quick-actions a {
+  display: flex; align-items: center; gap: 11px; min-height: 50px;
+  background: #f6f9ff; border: 1px solid #e3ebf6; border-radius: 10px;
+  color: #224c8a; padding: 10px 12px; font-size: 12.5px; font-weight: 680; text-decoration: none;
+}
+.workspace .platform-quick-actions a:hover { background: #eaf2ff; border-color: #bdd2f3; }
+.workspace .platform-quick-actions a svg:last-child { margin-left: auto; color: #8194af; }
+.workspace .text-link { font-size: 12px; font-weight: 700; white-space: nowrap; text-decoration: none; }
+.workspace .text-link:hover { text-decoration: underline; }
+@media (max-width:1120px) { .workspace .platform-overview-grid { grid-template-columns: 1fr; gap: 0; } }
+@media (max-width:520px) { .workspace .platform-quick-row { gap: 8px; } }

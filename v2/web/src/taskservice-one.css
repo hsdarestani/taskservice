@@ -480,3 +480,23 @@ body { font-family: Inter, "Segoe UI", Arial, system-ui, sans-serif; color: var(
  .company-status { font-size: 10px; padding: 4px 6px; }
  .workspace .platform-section-title { flex-wrap: wrap; }
 }
+
+
+/* No invisible off-screen menu items on phones: native, keyboard-accessible full section picker. */
+.workspace-mobile-choose { display: none; }
+@media (max-width:800px) {
+  .workspace:not(.workspace-technician) .workspace-mobile-choose {
+    display: flex; align-items: center; gap: 12px; margin: 12px 5px 2px;
+  }
+  .workspace:not(.workspace-technician) .workspace-mobile-choose label {
+    color: #b2c4e0; font-size: 12px; font-weight: 630; flex: none;
+  }
+  .workspace:not(.workspace-technician) .workspace-mobile-choose select {
+    color: #fff; background: #243a5a; border: 1px solid #526a8e;
+    border-radius: 9px; flex: 1; min-width: 0; min-height: 44px;
+    margin: 0; padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 660;
+  }
+  .workspace:not(.workspace-technician) .workspace-mobile-choose select option { color: #111e35; background: #fff; }
+  .workspace:not(.workspace-technician) .workspace-sidebar nav { display: none; }
+  .workspace-technician .workspace-mobile-choose { display: none; }
+}

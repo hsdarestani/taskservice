@@ -625,8 +625,10 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
           <section className="ticket-surface ticket-recent-history">
             <div className="ticket-surface-heading ticket-surface-heading-inline"><h2>Letzte Aktivitäten</h2>
               <button type="button" onClick={() => setTab('timeline')}>Alle ansehen</button></div>
-            <ol className="ticket-timeline-mini">{recentHistory.map((entry, index) =>
-              <li key={index}><strong>{states[entry.state] || entry.state}</strong><time dateTime={entry.at}>{date(entry.at)}</time></li>)}</ol>
+            {recentHistory.length === 0
+              ? <p className="ticket-timeline-empty">Noch keine Statusänderungen erfasst.</p>
+              : <ol className="ticket-timeline-mini">{recentHistory.map((entry, index) =>
+                  <li key={index}><strong>{states[entry.state] || entry.state}</strong><time dateTime={entry.at}>{date(entry.at)}</time></li>)}</ol>}
           </section>
           {row.actions.length > 0 && <button className="ticket-quick-action" onClick={() => setTab('actions')}>
             Vorgang bearbeiten<ChevronRight size={17} aria-hidden/>
@@ -635,15 +637,12 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
       </div>}
 
       {selected === 'actions' && row.actions.length > 0 && <div className="ticket-focus-view ticket-actions-view">
-        <div className="ticket-view-heading"><h2>Vorgang bearbeiten</h2><p>Nur für deine Rolle freigegebene Aktionen stehen hier zur Auswahl.</p></div>
         <Commands key={row.revision} row={row} session={session} refresh={() => setRevision(value => value + 1)}/>
       </div>}
-      {selected === 'report' && <div className="ticket-focus-view"><div className="ticket-view-heading">
-        <h2>Arbeitsbericht</h2><p>Dokumentation, Prüfung und Veröffentlichung.</p>
-      </div><ReportPanel id={id} session={session}/></div>}
-      {selected === 'invoices' && <div className="ticket-focus-view"><div className="ticket-view-heading">
-        <h2>Rechnungen</h2><p>Belege, Versionen und Freigaben.</p>
-      </div><InvoicesPanel id={id} session={session}/></div>}
+      {selected === 'report' && <div className="ticket-focus-view">
+        <ReportPanel id={id} session={session}/></div>}
+      {selected === 'invoices' && <div className="ticket-focus-view">
+        <InvoicesPanel id={id} session={session}/></div>}
       {selected === 'messages' && <div className="ticket-focus-view"><Chat session={session} id={id} channel="customer" title="Nachrichten zur Anfrage"/></div>}
       {selected === 'internal' && row.canReadInternal && <div className="ticket-focus-view">
         <Chat session={session} id={id} channel="internal" title="Interne Notizen"/></div>}

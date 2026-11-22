@@ -158,6 +158,40 @@ with sync_playwright() as playwright:
             expect(panel.get_by_role("heading")).to_be_visible()
         return context, page, panel
 
+
+    # Full-role visual and responsive audit. No request for manually supplied screenshots:
+    # every major request view is captured from the synthetic browser fixture.
+    for role, staff, allowed_tabs in (
+        ("admin-a", True, ("overview", "actions", "report", "invoices", "messages", "internal", "timeline")),
+        ("tech-a", False, ("overview", "actions", "report", "messages", "internal", "timeline")),
+        ("customer-a", False, ("overview", "actions", "report", "invoices", "messages", "timeline")),
+    ):
+        for width, height in ((390, 844), (768, 1024), (1366, 900)):
+            headers = {"X-Test-Subject": role}
+            if staff:
+                headers["X-Test-Mfa"] = "1"
+            context = browser.new_context(viewport={"width": width, "height": height},
+                ignore_https_errors=True, extra_http_headers=headers)
+            page = context.new_page()
+            workspace_path = path.replace("/lab/anfragen/", "/lab/betrieb/anfragen/") if staff else (
+                path.replace("/lab/anfragen/", "/lab/technik/anfragen/") if role == "tech-a" else path
+            )
+            page.goto(origin + workspace_path, wait_until="domcontentloaded")
+            expect(page.locator(".request-workspace-title h1")).to_be_visible()
+            for chosen in allowed_tabs:
+                # Only verify authorized UI sections; a user cannot access internal notes
+                # if the API has not granted that claim.
+                available = page.locator("#ticket-tab-" + chosen)
+                if available.count() == 0:
+                    continue
+                show_tab(page, chosen)
+                expect(page.locator("#ticket-panel")).to_be_visible()
+                assert page.evaluate("document.documentElement.scrollWidth") <= width, (role, chosen, width)
+                page.screenshot(path=output / f"request-{role}-{chosen}-{width}.png", full_page=True)
+            if role == "customer-a":
+                assert page.locator("#ticket-tab-internal").count() == 0
+            context.close()
+
     def send_request_command(page, action, button_name="Änderung speichern"):
         commands = page.locator("section").filter(has=page.get_by_role("heading", name="Vorgang bearbeiten", exact=True))
         commands.get_by_label("Aktion", exact=True).select_option(action)

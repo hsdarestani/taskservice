@@ -97,7 +97,7 @@ function App() {
       <p>Die Demo speichert die Anmeldedaten deines Testkontos, geschützte Sitzungsschlüssel sowie die von dir erstellten Testanfragen.</p>
     </Panel></main></>;
   if (portal !== 'customer' && workspaceAccess !== 'allowed') return <>{demoBanner}
-    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name}/>
+    <WorkspaceGate portal={portal} access={workspaceAccess} companyName={company.data?.name} accountEmail={session.data.email}/>
   </>;
   if (atCustomerHome && company.data) return <>{demoBanner}
     <a className="skip" href="#inhalt">Zum Inhalt</a>
@@ -139,8 +139,8 @@ const workspaceMenus = {
     { name: 'Chat', id: 'conversations', icon: MessagesSquare }]
 };
 
-function WorkspaceGate({ portal, access, companyName }: {
-  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied' | 'unavailable'; companyName?: string;
+function WorkspaceGate({ portal, access, companyName, accountEmail }: {
+  portal: Exclude<Portal, 'customer'>; access: 'sign-in' | 'checking' | 'denied' | 'unavailable'; companyName?: string; accountEmail?: string;
 }) {
   const heading = access === 'sign-in' ? 'Im Arbeitsbereich anmelden'
     : access === 'checking' ? 'Zugriff wird geprüft'
@@ -156,6 +156,7 @@ function WorkspaceGate({ portal, access, companyName }: {
     <main id="inhalt" className="workspace-gate-main"><div className="workspace-gate-card">
       <div className="workspace-gate-icon"><LockKeyhole size={25} aria-hidden/></div>
       <p className="eyebrow">Sicherer Arbeitsbereich</p><h1>{heading}</h1><p>{message}</p>
+      {access === 'denied' && accountEmail && <p className="muted">Aktuelles Arbeitskonto: <strong>{accountEmail}</strong></p>}
       {(access === 'sign-in' || access === 'denied') && <a className="primary" href={destination}>
         {access === 'sign-in' ? 'Zur Anmeldung' : 'Anderes Arbeitskonto verwenden'}</a>}
       {access === 'unavailable' && <button className="primary" type="button" onClick={() => location.reload()}>

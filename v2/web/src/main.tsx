@@ -9,6 +9,8 @@ import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerP
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
 import { navigationForRole, resolveWorkspaceAccess } from './workspaceAccess';
+import { PolicyCenter, plans } from './PolicyCenter';
+import { CompanyFeatures } from './CompanyFeatures';
 import { NativeLogin } from './NativeLogin';
 import { AcceptInvitation, InitialAdminSetup, Team } from './Team';
 import './styles.css';
@@ -112,7 +114,7 @@ function App() {
     : portal === 'platform' ? <Platform session={session.data}/>
     : company.data && portal !== 'customer'
       ? <Dashboard company={company.data} session={session.data} portal={portal}/>
-      : company.data ? <Account session={session.data} loginLink={loginLink} logout={logout}/>
+      : company.data ? <Account intakeAvailable={company.data.intakeAvailable} session={session.data} loginLink={loginLink} logout={logout}/>
       : <Panel><h1>Ihr Kontakt zum Servicebetrieb</h1><p>Öffnen Sie das Portal Ihres Servicebetriebs über dessen persönlichen Link.</p></Panel>;
 
   return <>{demoBanner}
@@ -120,7 +122,7 @@ function App() {
     {portal === 'customer' ? <div className="consumer-account">
       {company.data ? <CustomerHeader base={base} company={company.data}/> : <header className="bar"><Wordmark href="/"/></header>}
       <main id="inhalt" className="account-main">{body}</main>
-      {company.data && <CustomerNav base={base} account/>}
+      {company.data && <CustomerNav base={base} allowRequest={company.data.intakeAvailable} account/>}
     </div> : <Workspace portal={portal} company={company.data} signedIn={session.data.signedIn} logout={logout}>{body}</Workspace>}
   </>;
 }
@@ -130,7 +132,7 @@ const WorkspaceSectionContext = createContext('overview');
 const workspaceLabels = { platform: 'Plattformverwaltung', company: 'Servicebetrieb', technician: 'Technik' };
 const workspaceMenus = {
   platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
-    { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
+    { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Funktionsverwaltung', id: 'features', icon: Plug }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
   company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
     { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Team und Rechte', id: 'team', icon: ShieldCheck },
     { name: 'Integrationen', id: 'integrations', icon: Plug },
@@ -211,13 +213,13 @@ function Workspace({ portal, company, signedIn, logout, children }: {
 }
 
 type PlatformCompany = {
-  slug: string; name: string; accent: string; lifecycle: 'active' | 'suspended' | 'deactivated'; revision: number;
+  slug: string; name: string; accent: string; planCode: string; lifecycle: 'active' | 'suspended' | 'deactivated'; revision: number;
 };
 type PlatformAuditEntry = { id: string; slug: string; action: string; reason?: string; recordedAt: string };
 const platformApi = '/api/v1/platform';
 const companyState = { active: 'Aktiv', suspended: 'Gesperrt', deactivated: 'Deaktiviert' };
 const platformAction: Record<string, string> = {
-  provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
+  plan: 'Tarif ändern', feature: 'Funktion konfigurieren', provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
   activate: 'Portal aktivieren', deactivate: 'Unternehmen deaktivieren', initial_admin_invited: 'Erste Administration eingeladen',
 };
 
@@ -234,8 +236,9 @@ function Platform({ session }: { session: Session }) {
   const refresh = () => { setCursor(''); setAuditCursor(undefined); setReload(x => x + 1); };
   return <>
     <div className="workspace-heading"><p className="eyebrow">TaskService / Plattform</p>
-      <h1>{section === 'companies' ? 'Unternehmen' : section === 'audit' ? 'Änderungsprotokoll' : 'Plattformübersicht'}</h1>
+      <h1>{section === 'companies' ? 'Unternehmen' : section === 'features' ? 'Funktionsverwaltung' : section === 'audit' ? 'Änderungsprotokoll' : 'Plattformübersicht'}</h1>
       <p>{section === 'companies' ? 'Servicebetriebe, Zugänge und Marken an einem Ort verwalten.'
+        : section === 'features' ? 'Plattformweite Sperren und den Leistungsumfang der Tarife verwalten.'
         : section === 'audit' ? 'Sicher nachvollziehen, was auf der Plattform geändert wurde.'
         : 'Alle Servicebetriebe und ihre Aktivität im Blick behalten.'}</p>
     </div>
@@ -268,6 +271,7 @@ function Platform({ session }: { session: Session }) {
           </div>
         </Panel>
       </div></>}
+      {section === 'features' && <PolicyCenter csrfToken={session.csrfToken}/>}
       {section === 'companies' && <div className="platform-company-grid" id="companies">
         <Panel>
           <div className="section-line platform-section-title"><div><h2>Unternehmen</h2>
@@ -287,6 +291,9 @@ function Platform({ session }: { session: Session }) {
                 <span className={'company-status company-status-' + item.lifecycle}>{companyState[item.lifecycle]}</span>
               </summary>
               <div className="company-record-body">
+                {expandedCompany === item.slug && item.lifecycle !== 'deactivated' &&
+                  <CompanyFeatures companyPath={platformApi + '/companies/' + encodeURIComponent(item.slug)}
+                    revision={item.revision} csrfToken={session.csrfToken} onChange={refresh}/>}
                 {item.lifecycle !== 'deactivated' && <CompanyEditor company={item} session={session} refresh={refresh}/>}
                 {item.lifecycle === 'active' && <InitialAdminSetup session={session} onChange={refresh}
                   companyUrl={platformApi + '/companies/' + encodeURIComponent(item.slug)}/>}
@@ -337,7 +344,7 @@ function CompanyEditor({ session, refresh, company }: { session: Session; refres
   return <form onSubmit={save}>
     {company
       ? <label>Unternehmensaktion<select value={action} onChange={e => setAction(e.target.value)}>
-        {['brand', company.lifecycle === 'active' ? 'suspend' : 'activate', 'deactivate'].map(key =>
+        {['brand', 'plan', company.lifecycle === 'active' ? 'suspend' : 'activate', 'deactivate'].map(key =>
           <option key={key} value={key}>{platformAction[key]}</option>)}
       </select></label>
       : <label>Portaladresse <small>Kleinbuchstaben, Ziffern und Bindestriche, zum Beispiel werkstatt-nord.</small>
@@ -347,6 +354,8 @@ function CompanyEditor({ session, refresh, company }: { session: Session; refres
         <label>Unternehmensname<input name="name" defaultValue={company?.name} maxLength={120} required/></label>
         <label>Markenfarbe<input name="accent" type="color" defaultValue={company?.accent || '#075aca'} required/></label>
       </div>
+      : action === 'plan' ? <label>Tarif<select name="plan" defaultValue={company?.planCode}>
+        {Object.entries(plans).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
       : <><label>Begründung<textarea name="reason" maxLength={500} rows={2} required/></label>
         {action === 'deactivate' && <p>Das Portal wird deaktiviert. Die gespeicherten Vorgänge bleiben erhalten.</p>}
       </>}
@@ -356,10 +365,6 @@ function CompanyEditor({ session, refresh, company }: { session: Session; refres
 }
 
 type RequestPage = { items: RequestRow[]; nextCursor?: string };
-const categoryNames: Record<string, string> = {
-  repair: 'Reparaturen', cleaning: 'Reinigung', electric: 'Elektro & Sanitär', garden: 'Haus & Garten',
-  furniture: 'Möbelmontage', other: 'Weitere Services',
-};
 const berlinDay = (value: string | Date) => new Intl.DateTimeFormat('sv-SE', {
   year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Europe/Berlin',
 }).format(new Date(value));
@@ -367,7 +372,7 @@ const berlinTime = (value: string) => new Intl.DateTimeFormat('de-DE', {
   timeStyle: 'short', timeZone: 'Europe/Berlin',
 }).format(new Date(value));
 
-function Account({ session, loginLink, logout }: { session: Session; loginLink: string; logout: () => Promise<void> }) {
+function Account({ session, loginLink, logout, intakeAvailable }: { intakeAvailable: boolean; session: Session; loginLink: string; logout: () => Promise<void> }) {
   const [cursor, setCursor] = useState('');
   const requests = useLoad<RequestPage>(session.signedIn
     ? api + '/requests?view=mine' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') : undefined);
@@ -380,7 +385,7 @@ function Account({ session, loginLink, logout }: { session: Session; loginLink: 
       <p>Nach der Anmeldung siehst du deine bestätigten Anfragen und Nachrichten.</p>
       <a className="primary" href={loginLink}>Anmelden</a></div></Panel>
       : <Panel>
-        <div className="section-line"><h2>Deine Servicevorgänge</h2><a href={base + '?anfrage=neu'}>Neue Anfrage</a></div>
+        <div className="section-line"><h2>Deine Servicevorgänge</h2>{intakeAvailable && <a href={base + '?anfrage=neu'}>Neue Anfrage</a>}</div>
         <Notice text={requests.error}/>
         {!requests.data && !requests.error && <p role="status">Anfragen werden geladen …</p>}
         {requests.data?.items.length === 0 && <div className="account-empty"><ClipboardList aria-hidden/>
@@ -388,7 +393,7 @@ function Account({ session, loginLink, logout }: { session: Session; loginLink: 
           <a href={base + '#services'} className="primary">Services entdecken</a></div>}
         {requests.data && <ul className="request-cards">{requests.data.items.map(row =>
           <li key={row.id}><a className="request-card" href={base + '/anfragen/' + row.id + '?ansicht=konto'}>
-            <div><small>{row.serviceCategory && categoryNames[row.serviceCategory]}</small><strong>{row.title}</strong>
+            <div><small>{row.serviceCategory && row.serviceLabel}</small><strong>{row.title}</strong>
               <small>{row.appointment ? 'Termin: ' + date(row.appointment.startsAt) : date(row.createdAt)}</small></div>
             <Badge state={row.state}/>
           </a></li>)}</ul>}
@@ -466,7 +471,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       {isCompany ? visible.length > 0 && <div className="request-table-wrap"><table className="request-table">
         <thead><tr><th scope="col">Anfrage</th><th scope="col">Status</th><th scope="col">Termin</th></tr></thead>
         <tbody>{visible.map(row => <tr key={row.id}><th scope="row"><a href={detailPath(row)}>{row.title}</a>
-          <small>{row.serviceCategory ? categoryNames[row.serviceCategory] : date(row.createdAt)}</small></th>
+          <small>{row.serviceCategory ? row.serviceLabel : date(row.createdAt)}</small></th>
           <td><Badge state={row.state}/></td><td>{row.appointment ? date(row.appointment.startsAt) : 'Offen'}</td></tr>)}</tbody>
       </table></div> : <ul className="request-cards technician-cards">{visible.map(row => <li key={row.id}>
         <a className="request-card" href={detailPath(row)}><div><strong>{row.title}</strong>
@@ -560,7 +565,7 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
         <div className="request-workspace-title">
           <p className="request-workspace-kicker">Servicevorgang <span aria-hidden>·</span> {id.slice(0, 8)}</p>
           <h1>{row.title}</h1>
-          <p>Erstellt am {date(row.createdAt)} <span aria-hidden>·</span> {row.serviceCategory ? categoryNames[row.serviceCategory] || row.serviceCategory : 'Serviceanfrage'}</p>
+          <p>Erstellt am {date(row.createdAt)} <span aria-hidden>·</span> {row.serviceCategory ? row.serviceLabel || row.serviceCategory : 'Serviceanfrage'}</p>
         </div>
         <Badge state={row.state}/>
       </div>

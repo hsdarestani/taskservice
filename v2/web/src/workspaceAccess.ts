@@ -21,7 +21,7 @@ export function resolveWorkspaceAccess(
 }
 
 export function navigationForRole(kind: Exclude<WorkspaceKind, 'customer'>, tenantRole?: string) {
-  if (kind === 'platform') return ['overview', 'companies', 'audit'];
+  if (kind === 'platform') return ['overview', 'companies', 'features', 'audit'];
   if (kind === 'technician') return ['requests', 'schedule', 'conversations'];
   const common = ['overview', 'requests', 'technicians'];
   return tenantRole === 'admin'

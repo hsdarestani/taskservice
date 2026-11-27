@@ -39,5 +39,5 @@ test('menus contain only capabilities authorized for that role', () => {
   const admin = navigationForRole('company', 'admin');
   assert.ok(admin.includes('team') && admin.includes('integrations'));
   assert.deepEqual(navigationForRole('technician'), ['requests', 'schedule', 'conversations']);
-  assert.deepEqual(navigationForRole('platform'), ['overview', 'companies', 'audit']);
+  assert.deepEqual(navigationForRole('platform'), ['overview', 'companies', 'features', 'audit']);
 });

@@ -221,7 +221,7 @@ type PlatformAuditEntry = { id: string; slug: string; action: string; reason?: s
 const platformApi = '/api/v1/platform';
 const companyState = { active: 'Aktiv', suspended: 'Gesperrt', deactivated: 'Deaktiviert' };
 const platformAction: Record<string, string> = {
-  plan: 'Tarif ändern', feature: 'Funktion konfigurieren', provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
+  form: 'Anfrageformular ändern', plan: 'Tarif ändern', feature: 'Funktion konfigurieren', provision: 'Unternehmen anlegen', brand: 'Marke ändern', suspend: 'Portal sperren',
   activate: 'Portal aktivieren', deactivate: 'Unternehmen deaktivieren', initial_admin_invited: 'Erste Administration eingeladen',
 };
 
@@ -601,6 +601,8 @@ function RequestDetail({ session, id, portal }: { session: Session; id: string; 
             <div className="ticket-surface-heading"><div className="ticket-heading-icon"><ClipboardList size={18} aria-hidden/></div>
               <div><h2 id="ticket-description">Anfrage im Überblick</h2><p>Beschreibung und wichtige Angaben</p></div></div>
             <p className="ticket-description preserve">{row.description}</p>
+            {!!row.intakeAnswers?.length && <dl>{row.intakeAnswers.map((answer, index) =>
+              <div key={index}><dt>{answer.label}</dt><dd>{answer.value}</dd></div>)}</dl>}
             {row.photos?.length > 0 && <div className="ticket-attachments">
               <h3><FileText size={16} aria-hidden/> Anhänge <span>{row.photos.length}</span></h3>
               <div className="ticket-attachment-list">{row.photos.map(photo => photo.scanStatus === 'clean'

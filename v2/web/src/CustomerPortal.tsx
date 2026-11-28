@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ArrowRight, Camera, Check, CheckCircle2, ClipboardList, Grid2X2, Home, MapPin, Search, ShieldCheck, Zap, Plug, Lightbulb, Cable, ScanLine, Network, Sun, Wrench, UserRound, X } from 'lucide-react';
 import { send } from './api';
+import { emptyForm } from './ServiceFormEditor';
+import type { ServiceForm } from './ServiceFormEditor';
 import type { Company, Session } from './api';
 
 export type ServiceCategory = {
@@ -12,6 +14,8 @@ export type ServiceCategory = {
   group: string;
   image: string;
   featured: boolean;
+  form?: ServiceForm;
+  formVersion?: string;
 };
 
 const symbols: Record<string, typeof Plug> = {
@@ -161,6 +165,10 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState(session.email || '');
+  const [answers, setAnswers] = useState<Record<string,string>>({});
+  const service = categories.find(s => s.id === category);
+  const form = service?.form ?? emptyForm;
+  const fields = form.fields.filter(f => !f.whenYes || answers[f.whenYes] === 'yes');
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -202,6 +210,10 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
       setError('Gib einen kurzen Titel ein und wähle einen Service.');
       return;
     }
+    if (step === 1 && files.length < form.minimumPhotos) {
+      setError('Bitte füge mindestens ' + form.minimumPhotos + ' Foto(s) hinzu.');
+      return;
+    }
     if (step === 1 && description.trim().length < 10) {
       setError('Beschreibe dein Anliegen mit mindestens 10 Zeichen.');
       return;
@@ -218,7 +230,7 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
     try {
       const photos = await Promise.all(files.map(photoBody));
       const submitted = await send<{ id: string }>(api + '/requests',
-        { title, category, description, name, phone, email, photos }, session.csrfToken, key.current);
+        { title, category, description, name, phone, email, photos, formVersion: service?.formVersion, answers: Object.fromEntries(fields.filter(f => answers[f.key]).map(f => [f.key, answers[f.key]])) }, session.csrfToken, key.current);
       setResult(submitted.id);
     } catch (cause) {
       setError((cause as Error).message);
@@ -255,7 +267,7 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
             <fieldset className="category-options"><legend>Welche Art von Service?</legend>
               <div>{categories.map(service => <label key={service.id}>
                 <input type="radio" name="category" value={service.id} checked={category === service.id} required
-                  onChange={() => setCategory(service.id)}/><span>{service.label}</span>
+                  onChange={() => { setCategory(service.id); setAnswers({}); }}/><span>{service.label}</span>
               </label>)}</div>
             </fieldset>
           </>}
@@ -263,9 +275,16 @@ function RequestWizard({ categories, initial, api, session, base, privacyNoticeU
             <p>Was soll gemacht werden? Gibt es etwas, das der Servicebetrieb wissen sollte?</p>
             <label>Dein Anliegen<textarea name="description" value={description} required minLength={10} maxLength={4000}
               rows={5} onChange={event => setDescription(event.target.value)}/></label>
+            {form.instructions && <p className="notice">{form.instructions}</p>}
+            {fields.map(f => <label key={f.key}>{f.label}{f.required ? ' (Pflichtfeld)' : ''}
+              {f.kind === 'yesno' ? <select value={answers[f.key] || ''} required={f.required}
+                onChange={e => setAnswers({...answers, [f.key]: e.target.value})}>
+                <option value="">Bitte wählen</option><option value="yes">Ja</option><option value="no">Nein</option>
+              </select> : <input value={answers[f.key] || ''} required={f.required} maxLength={500}
+                onChange={e => setAnswers({...answers, [f.key]: e.target.value})}/>}</label>)}
             <label className="photo-drop">
               <span className="photo-drop-icon"><Camera size={26} aria-hidden/></span>
-              <strong>Fotos hinzufügen (optional)</strong>
+              <strong>Fotos hinzufügen {form.minimumPhotos ? '(mindestens ' + form.minimumPhotos + ')' : '(optional)'}</strong>
               <small>{fileHelp}</small>
               <span className="photo-drop-action">Fotos auswählen</span>
               <input className="photo-drop-native" type="file" aria-label="Fotos auswählen" accept="image/jpeg,image/png,image/webp" multiple

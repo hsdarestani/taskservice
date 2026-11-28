@@ -21,6 +21,7 @@ export type RequestRow = {
   serviceLabel?: string; serviceCategory?: string; appointment?: AppointmentView;
 };
 export type Detail = RequestRow & {
+  intakeAnswers?: {label: string; value: string}[];
   description: string;
   canReadInternal: boolean;
   contactName?: string;

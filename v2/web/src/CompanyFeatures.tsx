@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { ApiError, send } from './api';
+import { ServiceFormEditor, emptyForm } from './ServiceFormEditor';
+import type { ServiceForm } from './ServiceFormEditor';
 import { useLoad } from './useLoad';
 
 type State = 'default' | 'enabled' | 'disabled';
 type Feature = { key: string; label: string; effective: boolean; defaultEnabled: boolean; globallyDisabled: boolean; unlicensed: boolean; parent?: string; state: State };
-type Registry = { revision: number; items: Feature[] };
+type Registry = { revision: number; items: Feature[]; forms: Record<string, ServiceForm> };
 
 export function CompanyFeatures({ companyPath, revision, csrfToken, onChange }: {
   companyPath: string; revision: number; csrfToken: string; onChange: () => void;
 }) {
+  const [editing, setEditing] = useState('');
   const [query, setQuery] = useState('');
   const [saving, setSaving] = useState('');
   const [message, setMessage] = useState('');
@@ -51,6 +54,11 @@ export function CompanyFeatures({ companyPath, revision, csrfToken, onChange }: 
         <option value="default">Standard ({item.defaultEnabled ? 'aktiv' : 'inaktiv'})</option>
         <option value="enabled">Aktivieren</option><option value="disabled">Deaktivieren</option>
       </select>
+      {item.key.startsWith('service.') && <button type="button" aria-expanded={editing === item.key}
+        onClick={() => setEditing(editing === item.key ? '' : item.key)}>Formular bearbeiten · {item.label}</button>}
+      {editing === item.key && registry.data && <ServiceFormEditor key={item.key + '/' + registry.data.revision}
+        companyPath={companyPath} csrfToken={csrfToken} revision={registry.data.revision} refresh={onChange}
+        service={item.key.slice(8)} label={item.label} initial={registry.data.forms[item.key.slice(8)] ?? emptyForm}/>}
     </div>)}
   </section>;
 }

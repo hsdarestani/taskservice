@@ -20,7 +20,7 @@ public static partial class Endpoints
         group.MapGet("/companies/{slug}/setup", AdminSetupStatus);
         group.MapPost("/companies/{slug}/setup", InviteInitialAdmin).WithMetadata(new RequestSizeLimitAttribute(4096)).RequireRateLimiting("invitations");
         group.MapPost("/companies", CreateCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
-        group.MapPost("/companies/{slug}/commands", ModifyCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
+        group.MapPost("/companies/{slug}/commands", ModifyCompany).WithMetadata(new RequestSizeLimitAttribute(16384));
     }
 
     private static async Task<IResult> Platform(Guid? cursor, HttpContext http, IConfiguration config, CancellationToken ct)
@@ -72,7 +72,7 @@ public static partial class Endpoints
 
     private static Task<IResult> ModifyCompany(string slug, CompanyCommand body, HttpContext http, IConfiguration config,
         CancellationToken ct) =>
-        body.Action is "brand" or "suspend" or "activate" or "deactivate" or "feature" or "plan"
+        body.Action is "brand" or "suspend" or "activate" or "deactivate" or "feature" or "plan" or "form"
             ? ApplyCompany(http, config, slug, body, ct)
             : Task.FromResult(ApiProblem.Error(422, "invalid_company_action", "Diese Unternehmensaktion ist ungültig."));
 
@@ -90,6 +90,8 @@ public static partial class Endpoints
         if (body.Action is "suspend" or "activate" or "deactivate" && !ValidMultilineText(body.Reason, 500))
             return ApiProblem.Error(422, "missing_reason", "Bitte begründen Sie diese Statusänderung.");
 
+        if (body.Action == "form" && !ServiceForms.Valid(body.Form))
+            return ApiProblem.Error(422, "invalid_service_form", "Bitte prüfen Sie die Felder und Anzeigebedingungen.");
         if (body.Action == "plan" && (body.Plan is null || !PlanScopes.Contains(body.Plan) || body.Plan == "global"))
             return ApiProblem.Error(422, "invalid_plan", "Der gewählte Tarif ist ungültig.");
         if (body.Action == "feature" && (body.Feature is not { Key: { Length: > 0 and <= 64 }, State: "enabled" or "disabled" or "default" } feature ||
@@ -134,7 +136,7 @@ public static partial class Endpoints
                 ("active", "suspend") => "suspended",
                 ("suspended", "activate") => "active",
                 ("active" or "suspended", "deactivate") => "deactivated",
-                ("active" or "suspended", "brand" or "feature" or "plan") => tenant.Lifecycle,
+                ("active" or "suspended", "brand" or "feature" or "plan" or "form") => tenant.Lifecycle,
                 _ => null
             };
             if (next is null)
@@ -146,6 +148,8 @@ public static partial class Endpoints
                 tenant.Name = body.Name!.Trim();
                 tenant.Accent = body.Accent!.ToLowerInvariant();
             }
+            if (body.Action == "form")
+                ServiceForms.Save(tenant, body.Form!);
             if (body.Action == "plan")
                 tenant.PlanCode = body.Plan!;
             if (body.Action == "feature")
@@ -155,7 +159,7 @@ public static partial class Endpoints
 
         db.PlatformAudit.Add(new(Guid.NewGuid(), tenant!.Id, actor, body.Action,
             body.Action is "suspend" or "activate" or "deactivate" ? body.Reason!.Trim() :
-                body.Action == "plan" ? body.Plan : body.Feature is { } change && body.Action == "feature" ? $"{change.Key} = {change.State}" : null, DateTimeOffset.UtcNow));
+                body.Action == "form" ? body.Form!.Service : body.Action == "plan" ? body.Plan : body.Feature is { } change && body.Action == "feature" ? $"{change.Key} = {change.State}" : null, DateTimeOffset.UtcNow));
         var command = new PlatformCommand(actor, operation, key, fingerprint,
             JsonSerializer.Serialize(CompanyView(tenant), Json), tenant.Revision, creating ? 201 : 200);
         db.PlatformCommands.Add(command);
@@ -200,5 +204,7 @@ public sealed record CompanyCommand(string Action, string? Name, string? Accent,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     FeatureChange? Feature = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? Plan = null);
+    string? Plan = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    FormChange? Form = null);
 public sealed record PlatformCompany(string Slug, string Name, string Accent, bool Active, string Lifecycle, int Revision, string PlanCode);

@@ -25,7 +25,7 @@ public static partial class Endpoints
                 policy.GloballyDisabled.Contains(key), policy.Unlicensed.Contains(key));
         }
         var items = ElectricalFeatures.Registry.Select(f => Describe(f.Key, f.Label, f.English, f.DefaultEnabled, f.Parent));
-        return Results.Ok(new { tenant.Revision, Items = items });
+        return Results.Ok(new { tenant.Revision, Items = items, Forms = ServiceForms.Read(tenant) });
     }
 
     private static void SetFeatureOverride(Tenant tenant, FeatureChange change)

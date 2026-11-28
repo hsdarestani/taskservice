@@ -894,6 +894,9 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     }
 
     [Fact]
+    public Task ServiceFormPolicyPersistsValidatedHistoricalAnswers() => ServiceFormChecks.Verify(lab);
+
+    [Fact]
     public async Task ElectricalCatalogChangesAreOwnerOnlyTenantScopedAndPreserveRequests()
     {
         using var owner = lab.Client("platform-admin", mfa: true);

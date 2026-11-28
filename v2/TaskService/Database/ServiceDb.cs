@@ -69,6 +69,7 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
 public sealed record Tenant(Guid Id, string Slug, string Name, string Accent, bool Active)
 {
     public int Revision { get; set; } = 1;
+    public string ServiceFormsJson { get; set; } = "{}";
     public string PlanCode { get; set; } = "custom";
     public string[] FeatureOverrides { get; set; } = [];
     public string Lifecycle { get; set; } = "active";
@@ -88,6 +89,7 @@ public sealed class ServiceRequest
     public required string Title { get; init; }
     public required string Description { get; init; }
     public required string ContactEmail { get; init; }
+    public string IntakeAnswersJson { get; init; } = "[]";
     public string? ServiceCategory { get; init; }
     public string? ContactName { get; init; }
     public string? ContactPhone { get; init; }

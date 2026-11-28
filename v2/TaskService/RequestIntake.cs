@@ -12,9 +12,13 @@ public static partial class Endpoints
         if (await FindTenant(db, slug, ct) is not { } tenant)
             return ApiProblem.NotFound();
         var policy = await ElectricalFeatures.LoadPolicy(db, tenant, ct);
+        var forms = ServiceForms.Read(tenant);
         return Results.Ok(ElectricalFeatures.Services.Where(policy.Offered)
-            .Select(s => new { s.Id, s.Label, Title = s.Label, s.SearchTerms, Group = "Elektrotechnik",
-                Image = "/services/electric.webp", Featured = false }));
+            .Select(s => {
+                var form = forms.GetValueOrDefault(s.Id, ServiceForms.Empty);
+                return new { s.Id, s.Label, Title = s.Label, s.SearchTerms, Group = "Elektrotechnik",
+                    Form = form, FormVersion = ServiceForms.Version(form), Image = "/services/electric.webp", Featured = false };
+            }));
     }
 
     private static bool ValidIntake(NewRequest body)

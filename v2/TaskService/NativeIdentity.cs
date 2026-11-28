@@ -93,7 +93,7 @@ public static class NativeIdentity
 
             var passwordValid = password != PasswordVerificationResult.Failed;
             var allowedRealm = !input.Workforce || account.Workforce;
-            var demoPasswordOnly = input.Workforce && DemoPasswordOnly(config, account.Email);
+            var demoPasswordOnly = input.Workforce && !account.PlatformAdmin && DemoPasswordOnly(config, account.Email);
             long? matchedStep = null;
             if (input.Workforce && !demoPasswordOnly && account.TotpCipher is { } encrypted && passwordValid && allowedRealm)
                 matchedStep = VerifyTotp(protection, encrypted, input.Code, account.LastTotpStep, now);

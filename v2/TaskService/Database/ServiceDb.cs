@@ -51,6 +51,8 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
         ConfigureReports(model);
         ConfigureInvoices(model);
         ConfigurePlatform(model);
+        model.Entity<FeaturePlan>().ToTable("feature_plans").HasKey(x => x.Code);
+        model.Entity<FeaturePolicyHistory>().ToTable("feature_policy_history").HasKey(x => new { x.Scope, x.Revision });
         ConfigureIntake(model);
         ConfigureTeam(model);
         ConfigureIntegration(model);
@@ -67,6 +69,9 @@ public sealed partial class ServiceDb(DbContextOptions<ServiceDb> options) : DbC
 public sealed record Tenant(Guid Id, string Slug, string Name, string Accent, bool Active)
 {
     public int Revision { get; set; } = 1;
+    public string ServiceFormsJson { get; set; } = "{}";
+    public string PlanCode { get; set; } = "custom";
+    public string[] FeatureOverrides { get; set; } = [];
     public string Lifecycle { get; set; } = "active";
     public string Name { get; set; } = Name;
     public string Accent { get; set; } = Accent;
@@ -84,6 +89,7 @@ public sealed class ServiceRequest
     public required string Title { get; init; }
     public required string Description { get; init; }
     public required string ContactEmail { get; init; }
+    public string IntakeAnswersJson { get; init; } = "[]";
     public string? ServiceCategory { get; init; }
     public string? ContactName { get; init; }
     public string? ContactPhone { get; init; }
@@ -128,3 +134,10 @@ public sealed record Outbox(Guid TenantId, Guid Id, string Kind, string Payload,
     public DateTimeOffset? CompletedAt { get; set; }
     public DateTimeOffset? DeadAt { get; set; }
 }
+
+public sealed record FeaturePlan(string Code)
+{
+    public string[] Withheld { get; set; } = [];
+    public int Revision { get; set; } = 1;
+}
+public sealed record FeaturePolicyHistory(string Scope, int Revision, string Actor, string[] Withheld, DateTimeOffset RecordedAt);

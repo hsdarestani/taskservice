@@ -12,12 +12,15 @@ public static partial class Endpoints
     private static void MapPlatform(WebApplication app)
     {
         var group = app.MapGroup("/api/v1/platform").AddEndpointFilter<CsrfFilter>();
+        group.MapGet("/policies/{scope}", ReadPolicy);
+        group.MapPost("/policies/{scope}", SavePolicy).WithMetadata(new RequestSizeLimitAttribute(8192));
         group.MapGet("/overview", Platform);
+        group.MapGet("/companies/{slug}/features", CompanyFeatures);
         group.MapGet("/audit", PlatformAuditLog);
         group.MapGet("/companies/{slug}/setup", AdminSetupStatus);
         group.MapPost("/companies/{slug}/setup", InviteInitialAdmin).WithMetadata(new RequestSizeLimitAttribute(4096)).RequireRateLimiting("invitations");
         group.MapPost("/companies", CreateCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
-        group.MapPost("/companies/{slug}/commands", ModifyCompany).WithMetadata(new RequestSizeLimitAttribute(4096));
+        group.MapPost("/companies/{slug}/commands", ModifyCompany).WithMetadata(new RequestSizeLimitAttribute(16384));
     }
 
     private static async Task<IResult> Platform(Guid? cursor, HttpContext http, IConfiguration config, CancellationToken ct)
@@ -69,7 +72,7 @@ public static partial class Endpoints
 
     private static Task<IResult> ModifyCompany(string slug, CompanyCommand body, HttpContext http, IConfiguration config,
         CancellationToken ct) =>
-        body.Action is "brand" or "suspend" or "activate" or "deactivate"
+        body.Action is "brand" or "suspend" or "activate" or "deactivate" or "feature" or "plan" or "form"
             ? ApplyCompany(http, config, slug, body, ct)
             : Task.FromResult(ApiProblem.Error(422, "invalid_company_action", "Diese Unternehmensaktion ist ungültig."));
 
@@ -86,6 +89,14 @@ public static partial class Endpoints
             return ApiProblem.Error(422, "invalid_brand", "Bitte geben Sie einen Namen und eine gültige Markenfarbe an.");
         if (body.Action is "suspend" or "activate" or "deactivate" && !ValidMultilineText(body.Reason, 500))
             return ApiProblem.Error(422, "missing_reason", "Bitte begründen Sie diese Statusänderung.");
+
+        if (body.Action == "form" && !ServiceForms.Valid(body.Form))
+            return ApiProblem.Error(422, "invalid_service_form", "Bitte prüfen Sie die Felder und Anzeigebedingungen.");
+        if (body.Action == "plan" && (body.Plan is null || !PlanScopes.Contains(body.Plan) || body.Plan == "global"))
+            return ApiProblem.Error(422, "invalid_plan", "Der gewählte Tarif ist ungültig.");
+        if (body.Action == "feature" && (body.Feature is not { Key: { Length: > 0 and <= 64 }, State: "enabled" or "disabled" or "default" } feature ||
+            !ElectricalFeatures.IsKnown(feature.Key)))
+            return ApiProblem.Error(422, "invalid_feature", "Die gewählte Funktion oder Einstellung ist ungültig.");
 
         var tag = http.Request.Headers.IfMatch.ToString();
         if (tag.Length == 0)
@@ -125,7 +136,7 @@ public static partial class Endpoints
                 ("active", "suspend") => "suspended",
                 ("suspended", "activate") => "active",
                 ("active" or "suspended", "deactivate") => "deactivated",
-                ("active" or "suspended", "brand") => tenant.Lifecycle,
+                ("active" or "suspended", "brand" or "feature" or "plan" or "form") => tenant.Lifecycle,
                 _ => null
             };
             if (next is null)
@@ -137,11 +148,18 @@ public static partial class Endpoints
                 tenant.Name = body.Name!.Trim();
                 tenant.Accent = body.Accent!.ToLowerInvariant();
             }
+            if (body.Action == "form")
+                ServiceForms.Save(tenant, body.Form!);
+            if (body.Action == "plan")
+                tenant.PlanCode = body.Plan!;
+            if (body.Action == "feature")
+                SetFeatureOverride(tenant, body.Feature!);
             tenant.Revision++;
         }
 
         db.PlatformAudit.Add(new(Guid.NewGuid(), tenant!.Id, actor, body.Action,
-            body.Action is "suspend" or "activate" or "deactivate" ? body.Reason!.Trim() : null, DateTimeOffset.UtcNow));
+            body.Action is "suspend" or "activate" or "deactivate" ? body.Reason!.Trim() :
+                body.Action == "form" ? body.Form!.Service : body.Action == "plan" ? body.Plan : body.Feature is { } change && body.Action == "feature" ? $"{change.Key} = {change.State}" : null, DateTimeOffset.UtcNow));
         var command = new PlatformCommand(actor, operation, key, fingerprint,
             JsonSerializer.Serialize(CompanyView(tenant), Json), tenant.Revision, creating ? 201 : 200);
         db.PlatformCommands.Add(command);
@@ -152,6 +170,7 @@ public static partial class Endpoints
 
     private static string? Operator(HttpContext http, IConfiguration config) =>
         IdentitySessions.HasPrivilegedAssurance(http.User, config) &&
+        !http.User.HasClaim(IdentitySessions.AssuranceClaim, NativeIdentity.DemoPasswordOnlyAssurance) &&
         (http.User.HasClaim("taskservice_role", "platform_admin") ||
          config["Identity:PlatformAdminSubject"] is { Length: > 0 } subject && http.User.HasClaim("sub", subject))
             ? Actor.Subject(http.User)
@@ -166,7 +185,7 @@ public static partial class Endpoints
         ApiProblem.Error(503, "platform_unavailable", "Die Plattformverwaltung ist vorübergehend nicht verfügbar.");
 
     private static PlatformCompany CompanyView(Tenant row) =>
-        new(row.Slug, row.Name, row.Accent, row.Active, row.Lifecycle, row.Revision);
+        new(row.Slug, row.Name, row.Accent, row.Active, row.Lifecycle, row.Revision, row.PlanCode);
 
     private static IResult PlatformResponse(HttpContext http, PlatformCommand previous, byte[] fingerprint)
     {
@@ -181,5 +200,11 @@ public static partial class Endpoints
 }
 
 public sealed record NewCompany(string Slug, string Name, string Accent);
-public sealed record CompanyCommand(string Action, string? Name, string? Accent, string? Reason);
-public sealed record PlatformCompany(string Slug, string Name, string Accent, bool Active, string Lifecycle, int Revision);
+public sealed record CompanyCommand(string Action, string? Name, string? Accent, string? Reason,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    FeatureChange? Feature = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Plan = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    FormChange? Form = null);
+public sealed record PlatformCompany(string Slug, string Name, string Accent, bool Active, string Lifecycle, int Revision, string PlanCode);

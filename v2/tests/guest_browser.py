@@ -19,12 +19,12 @@ with sync_playwright() as playwright:
         executable_path=os.environ.get("TASKSERVICE_CHROMIUM"),
         args=["--no-sandbox", "--ignore-certificate-errors"],
     )
-    for width, height in ((390, 844), (768, 1024), (1366, 900)):
+    for width, height in ((360, 780), (390, 844), (430, 932), (768, 1024), (1024, 768), (1440, 900), (1920, 1080)):
         page = browser.new_page(viewport={"width": width, "height": height}, ignore_https_errors=True)
         page.goto(f"{base}/unternehmen/{tenant}", wait_until="domcontentloaded")
-        expect(page.get_by_role("heading", name="Services für dein Zuhause")).to_be_visible()
+        expect(page.get_by_role("heading", name="Elektroservice anfragen")).to_be_visible()
         tiles = page.locator(".service-tile")
-        expect(tiles).to_have_count(6)
+        expect(tiles).to_have_count(4)
         page.evaluate("""async () => {
             await Promise.all([...document.images].map(image => {
                 image.loading = 'eager';
@@ -34,15 +34,15 @@ with sync_playwright() as playwright:
         assert page.evaluate("document.documentElement.scrollWidth") <= width
         page.screenshot(path=output / f"v2-home-{width}.png", full_page=True)
         search = page.get_by_role("searchbox", name="Service suchen")
-        search.fill("Wasserhahn")
+        search.fill("Steckdose")
         expect(tiles).to_have_count(1)
-        expect(tiles.first).to_have_text("Reparaturen")
+        expect(tiles.first).to_have_text("Elektroinstallation")
         search.fill("Suchbegriff ohne Treffer")
         expect(page.get_by_text("wurde kein Service gefunden", exact=False)).to_be_visible()
         page.get_by_role("button", name="Suche zurücksetzen").click()
-        expect(tiles).to_have_count(6)
+        expect(tiles).to_have_count(4)
 
-        entry = page.get_by_role("button", name="Reparaturen", exact=True)
+        entry = page.get_by_role("button", name="Elektroinstallation", exact=True)
         entry.focus()
         entry.press("Enter")
         dialog = page.get_by_role("dialog")
@@ -52,7 +52,7 @@ with sync_playwright() as playwright:
         expect(entry).to_be_focused()
         entry.click()
         expect(dialog.get_by_role("heading", name="Was muss erledigt werden?")).to_be_visible()
-        expect(dialog.get_by_role("radio", name="Reparaturen")).to_be_checked()
+        expect(dialog.get_by_role("radio", name="Elektroinstallation")).to_be_checked()
         page.screenshot(path=output / f"v2-wizard-{width}.png")
         dialog.get_by_role("button", name="Weiter").click()
         expect(dialog.get_by_text("Schritt 1 von 3", exact=True)).to_be_visible()
@@ -94,4 +94,4 @@ with sync_playwright() as playwright:
             page.screenshot(path=output / f"v2-access-{name}-{width}.png", full_page=True)
         page.close()
     browser.close()
-print("Service catalog, search, three wizard steps, validation and photo submission passed at 390, 768 and 1366 pixels.")
+print("Service catalog, search, three wizard steps, validation and photo submission passed at all seven configured viewport widths.")

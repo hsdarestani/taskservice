@@ -111,8 +111,8 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         using var admin = lab.Client("admin-a", mfa: true);
         var original = Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+lpb8AAAAASUVORK5CYII=");
-        var form = new NewRequest("Garten prüfen", "Synthetisches Anliegen mit einem Foto.", "qa@example.invalid",
-            "garden", "Test Kunde", "+49 1234567", [new("image/png", original)]);
+        var form = new NewRequest("Anlage prüfen", "Synthetisches Anliegen mit einem Foto.", "qa@example.invalid",
+            "inspection", "Test Kunde", "+49 1234567", [new("image/png", original)]);
         var endpoint = lab.Base() + "/requests";
         var bad = await lab.Post(guest, endpoint, form with { Photos = [new("image/webp", original)] });
         Assert.Equal(HttpStatusCode.UnprocessableEntity, bad.StatusCode);
@@ -125,7 +125,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         var id = (await first.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
         var path = lab.Request(id);
         var details = await admin.GetFromJsonAsync<JsonElement>(path);
-        Assert.Equal("garden", details.GetProperty("serviceCategory").GetString());
+        Assert.Equal("inspection", details.GetProperty("serviceCategory").GetString());
         Assert.Equal("Test Kunde", details.GetProperty("contactName").GetString());
         var file = Assert.Single(details.GetProperty("photos").EnumerateArray());
         var download = path + "/photos/" + file.GetProperty("id").GetGuid();
@@ -353,11 +353,11 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
     {
         const string password = "TaskService-Test-Only-28!";
         const string email = "demo-owner@example.invalid";
-        const string platformEmail = "demo-platform@example.invalid";
+        const string platformEmail = "demo-platform@taskservice-demo.invalid";
         var secret = RandomNumberGenerator.GetBytes(20);
         using var environment = new TestEnvironment(new()
         {
-            ["Identity__Mode"] = "native", ["Demo__Enabled"] = "true",
+            ["Identity__Mode"] = "native", ["Demo__Enabled"] = "true", ["Identity__DemoPasswordOnly"] = "true",
             ["Mail__DeliveryMode"] = "disabled"
         });
         await using var host = lab.IsolatedHost().WithWebHostBuilder(web => web.ConfigureServices(services =>
@@ -891,6 +891,139 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         await lab.Revoke(lab.TechChat);
         await Assert.ThrowsAsync<HubException>(async () => { await watch.MoveNextAsync(); });
         Assert.Equal(HttpStatusCode.NotFound, (await tech.GetAsync(internalRoom)).StatusCode);
+    }
+
+    [Fact]
+    public Task ServiceFormPolicyPersistsValidatedHistoricalAnswers() => ServiceFormChecks.Verify(lab);
+
+    [Fact]
+    public async Task ElectricalCatalogChangesAreOwnerOnlyTenantScopedAndPreserveRequests()
+    {
+        using var owner = lab.Client("platform-admin", mfa: true);
+        using var staff = lab.Client("admin-a", mfa: true);
+        using var weak = lab.Client("platform-admin");
+        await using var intakeHost = lab.IsolatedHost();
+        using var guest = intakeHost.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        const string slug = "elektro-qa";
+        const string companies = "/api/v1/platform/companies";
+        var path = companies + "/" + slug;
+        var tenant = Lab.TenantUrl(slug);
+        Assert.Equal(HttpStatusCode.Created, (await lab.Post(owner, companies,
+            new { slug, name = "Elektrotechnik QA", accent = "#123456" }, revision: 0)).StatusCode);
+        var enable = new { action = "feature", feature = new { key = "service.wallbox", state = "enabled" } };
+        foreach (var unauthorized in new[] { staff, weak, guest })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await unauthorized.GetAsync(path + "/features")).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(unauthorized, path + "/commands", enable, revision: 1)).StatusCode);
+        }
+        var features = await owner.GetFromJsonAsync<JsonElement>(path + "/features");
+        Assert.Equal(20, features.GetProperty("items").GetArrayLength());
+        var form = new NewRequest("Wallbox installieren", "Angebot für die Montage einer Wallbox.", "qa@example.invalid",
+            "wallbox", "Test Kunde", "+49 1234567", null);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(guest, tenant + "/requests", form)).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, path + "/commands", enable, key, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, path + "/commands", enable, key, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(owner, path + "/commands", enable, revision: 1)).StatusCode);
+        Assert.Contains("wallbox", await guest.GetStringAsync(tenant + "/catalog"));
+        Assert.DoesNotContain("wallbox", await guest.GetStringAsync(lab.Base() + "/catalog"));
+        var submissionKey = Guid.NewGuid().ToString();
+        var created = await lab.Post(guest, tenant + "/requests", form, submissionKey);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var pause = new { action = "feature", feature = new { key = ElectricalFeatures.Intake, state = "disabled" } };
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, path + "/commands", pause, revision: 2)).StatusCode);
+        Assert.Empty((await guest.GetFromJsonAsync<JsonElement>(tenant + "/catalog")).EnumerateArray());
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(guest, tenant + "/requests", form)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(guest, tenant + "/requests",
+            new { title = "Altclient", description = "Älteres Formular", email = "qa@example.invalid" })).StatusCode);
+        Assert.Equal(await created.Content.ReadAsStringAsync(),
+            await (await lab.Post(guest, tenant + "/requests", form, submissionKey)).Content.ReadAsStringAsync());
+        var audit = (await owner.GetFromJsonAsync<JsonElement>("/api/v1/platform/audit")).GetProperty("items");
+        Assert.Equal(2, audit.EnumerateArray().Count(row => row.GetProperty("slug").GetString() == slug &&
+            row.GetProperty("action").GetString() == "feature"));
+    }
+
+    [Fact]
+    public Task ElectricalUpgradePreservesHistoricalCategoriesAndRefusesLossyRollback() => MigrationChecks.ElectricalUpgradeAndRollback();
+
+    [Fact]
+    public async Task DispatchUsesBerlinBoundariesAndOnlyReturnsAuthorizedAssignments()
+    {
+        using var company = lab.Client("admin-a", mfa: true);
+        using var tech = lab.Client("tech-a");
+        using var otherTech = lab.Client("tech-chat");
+        using var customer = lab.Client("customer-a");
+        var id = await lab.Insert("assigned", lab.TechA);
+        await using var conn = new NpgsqlConnection(lab.Runtime);
+        await conn.OpenAsync();
+        await using (var tx = await conn.BeginTransactionAsync())
+        {
+            await Lab.Scope(conn, lab.TenantA);
+            await Lab.Execute(conn, $"""
+                INSERT INTO ts.appointments (tenant_id,id,request_id,technician_id,starts_at,ends_at,cancelled,arrival_status)
+                VALUES ('{lab.TenantA}',gen_random_uuid(),'{id}','{lab.TechA}','2030-03-30T22:55:00Z','2030-03-30T23:15:00Z',false,'planned')
+                """);
+            await tx.CommitAsync();
+        }
+        var path = lab.Base() + "/dispatch?date=2030-03-31";
+        foreach (var role in new[] { company, tech })
+        foreach (var view in new[] { "day", "week", "month" })
+        {
+            var page = await role.GetFromJsonAsync<JsonElement>(path + "&view=" + view);
+            Assert.Contains(page.GetProperty("items").EnumerateArray(), x => x.GetProperty("requestId").GetGuid() == id);
+        }
+        Assert.DoesNotContain(id.ToString(), await otherTech.GetStringAsync(path));
+        Assert.Equal(HttpStatusCode.Forbidden, (await customer.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await company.GetAsync(Lab.TenantUrl("other") + "/dispatch?date=2030-03-31")).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await tech.GetAsync(path + "&view=year")).StatusCode);
+        using var owner = lab.Client("platform-admin", mfa: true);
+        var registry = "/api/v1/platform/companies/lab/features";
+        var rev = (await owner.GetFromJsonAsync<JsonElement>(registry)).GetProperty("revision").GetInt32();
+        Task<HttpResponseMessage> Set(string state, int revision) => lab.Post(owner, "/api/v1/platform/companies/lab/commands",
+            new { action = "feature", feature = new { key = ElectricalFeatures.Dispatch, state } }, revision: revision);
+        Assert.Equal(HttpStatusCode.OK, (await Set("disabled", rev)).StatusCode);
+        try { Assert.Equal(HttpStatusCode.NotFound, (await tech.GetAsync(path)).StatusCode); }
+        finally { Assert.Equal(HttpStatusCode.OK, (await Set("default", rev + 1)).StatusCode); }
+    }
+
+    [Fact]
+    public async Task PlatformShutdownOverridesPlanAndCompanyAndRecordsPolicyHistory()
+    {
+        using var owner = lab.Client("platform-admin", mfa: true);
+        using var staff = lab.Client("admin-a", mfa: true);
+        using var weak = lab.Client("platform-admin");
+        using var viewer = lab.Client();
+        const string root = "/api/v1/platform";
+        const string slug = "plan-pruefung";
+        var command = root + "/companies/" + slug + "/commands";
+        var catalog = Lab.TenantUrl(slug) + "/catalog";
+        var exclude = new { withheld = new[] { "service.solar" } };
+        var clear = new { withheld = Array.Empty<string>() };
+        Assert.Equal(HttpStatusCode.Created, (await lab.Post(owner, root + "/companies",
+            new { slug, name = "Solartechnik", accent = "#223344" }, revision: 0)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, command, new { action = "feature",
+            feature = new { key = "service.solar", state = "enabled" } }, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, command,
+            new { action = "plan", plan = "essential" }, revision: 2)).StatusCode);
+        Assert.Contains("solar", await viewer.GetStringAsync(catalog));
+        var plan = root + "/policies/essential";
+        var global = root + "/policies/global";
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.GetAsync(plan)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(weak, global, exclude, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await lab.Post(owner, global,
+            new { withheld = new[] { "tenant.isolation" } }, revision: 1)).StatusCode);
+        var key = Guid.NewGuid().ToString();
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, plan, exclude, key, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, plan, exclude, key, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await lab.Post(owner, plan, clear, revision: 1)).StatusCode);
+        Assert.DoesNotContain("solar", await viewer.GetStringAsync(catalog));
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, global, exclude, revision: 1)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, plan, clear, revision: 2)).StatusCode);
+        Assert.DoesNotContain("solar", await viewer.GetStringAsync(catalog));
+        Assert.Equal(HttpStatusCode.OK, (await lab.Post(owner, global, clear, revision: 2)).StatusCode);
+        Assert.Contains("solar", await viewer.GetStringAsync(catalog));
+        var state = await owner.GetFromJsonAsync<JsonElement>(plan);
+        Assert.Equal(2, state.GetProperty("history").GetArrayLength());
     }
 
     [Fact]

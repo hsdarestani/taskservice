@@ -27,6 +27,7 @@ public static partial class Endpoints
         group.MapGet("/requests/{id:guid}/photos/{photoId:guid}", DownloadPhoto);
         group.MapPost("/requests/{id:guid}/claim", ClaimRequest).RequireRateLimiting("guest");
         group.MapPost("/requests/{id:guid}/commands", Change);
+        group.MapGet("/dispatch", DispatchCalendar);
         group.MapGet("/technicians", Technicians);
         group.MapGet("/rooms/{channel}", Messages);
         group.MapPost("/rooms/{channel}", PostMessage);
@@ -71,7 +72,9 @@ public static partial class Endpoints
             return ApiProblem.NotFound();
         await using var tx = await db.ForTenant(tenant.Id, ct);
         var actor = await Actor.Read(db, tenant, http, ct);
-        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, Role = actor.Membership?.Role, PrivacyNoticeUrl = ReleaseGate.PrivacyNotice(config) });
+        var policy = await ElectricalFeatures.LoadPolicy(db, tenant, ct);
+        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, IntakeAvailable = policy.CanSubmit(null),
+            DispatchAvailable = (actor.IsCompany || actor.IsTechnician) && policy.Available(ElectricalFeatures.Dispatch, true), Role = actor.Membership?.Role, PrivacyNoticeUrl = ReleaseGate.PrivacyNotice(config) });
     }
 
     private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, string? q, HttpContext http, CancellationToken ct)
@@ -115,7 +118,7 @@ public static partial class Endpoints
                 x.Id, x.Title,
                 State = view != "mine" && (actor.IsCompany || actor.IsTechnician && actor.Membership!.Id == x.TechnicianId)
                     ? x.State : Workflow.CustomerState(x.State),
-                x.Revision, x.CreatedAt, x.ServiceCategory, x.Appointment
+                x.Revision, x.CreatedAt, x.ServiceCategory, ServiceLabel = ElectricalFeatures.CategoryLabel(x.ServiceCategory), x.Appointment
             }),
             nextCursor = rows.Count > 50 ? rows[49].Id : (Guid?)null
         });
@@ -141,7 +144,8 @@ public static partial class Endpoints
             State = staff ? request.State : Workflow.CustomerState(request.State),
             TechnicianId = staff ? request.TechnicianId : null,
             CanReadInternal = staff,
-            request.ServiceCategory,
+            request.ServiceCategory, ServiceLabel = ElectricalFeatures.CategoryLabel(request.ServiceCategory),
+            IntakeAnswers = JsonSerializer.Deserialize<RecordedAnswer[]>(request.IntakeAnswersJson, Json),
             ContactName = actor.IsCompany ? request.ContactName : null,
             ContactPhone = actor.IsCompany ? request.ContactPhone : null,
             Photos = await db.RequestPhotos.Where(x => x.TenantId == tenant.Id && x.RequestId == id)
@@ -202,11 +206,23 @@ public static partial class Endpoints
         await Lock(db, $"{tenant.Id}:{actor.Key}:{operation}:{key}", ct);
         if (await db.Commands.FindAsync([tenant.Id, actor.Key, operation, key], ct) is { } previous)
             return Replay(http, previous, fingerprint);
+        // Serialize new submissions with catalog changes, without serializing independent submissions.
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock_shared(hashtextextended('electrical:policy',0))", ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock_shared(hashtextextended({"platform:" + slug}, 0))", ct);
+        if (await FindTenant(db, slug, ct) is not { } current)
+            return ApiProblem.NotFound();
+        var policy = await ElectricalFeatures.LoadPolicy(db, current, ct);
+        if (!policy.CanSubmit(body.Category))
+            return ApiProblem.Error(409, "service_unavailable", "Dieser Service nimmt derzeit keine Anfragen entgegen.");
+        if (!ServiceForms.TryRecord(policy, body, out var answers))
+            return ApiProblem.Error(422, "invalid_service_form", "Bitte prüfen Sie die Zusatzangaben und Pflichtfotos für den gewählten Service.");
         var id = Guid.NewGuid();
         var request = new ServiceRequest
         {
             TenantId = tenant.Id, Id = id, Title = body.Title.Trim(), Description = body.Description.Trim(),
             ContactEmail = mail.Address, CreatedAt = DateTimeOffset.UtcNow, ServiceCategory = body.Category,
+            IntakeAnswersJson = JsonSerializer.Serialize(answers, Json),
             ContactName = body.Name?.Trim(), ContactPhone = body.Phone?.Trim(),
             CustomerKey = native ? actor.Key : null, State = native ? "verified" : "received"
         };
@@ -493,7 +509,11 @@ public static partial class Endpoints
 }
 
 public sealed record NewRequest(string Title, string Description, string Email, string? Category = null,
-    string? Name = null, string? Phone = null, NewRequestPhoto?[]? Photos = null);
+    string? Name = null, string? Phone = null, NewRequestPhoto?[]? Photos = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    Dictionary<string, string>? Answers = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? FormVersion = null);
 public sealed record ClaimBody(string Token);
 public sealed record RequestCommand(string Action, Guid? TechnicianId, DateTimeOffset? StartsAt,
     DateTimeOffset? EndsAt, string? ArrivalStatus, string? StartsAtLocal, string? EndsAtLocal, string? StartsAtFold,

@@ -7,25 +7,26 @@ namespace TaskService;
 
 public static partial class Endpoints
 {
-    private static readonly ServiceCategory[] Catalog =
-    [
-        new("repair", "Reparaturen", "Kleine Reparaturen", "Wasserhahn, Türen, Ausbesserungen", "Reparatur & Montage", true),
-        new("cleaning", "Reinigung", "Wohnungsreinigung", "Wohnung, Haushalt, Fenster", "Reinigung & Haushalt", true),
-        new("electric", "Elektro & Sanitär", "Elektro & Sanitär", "Licht, Steckdose, Wasseranschluss", "Haustechnik", false),
-        new("garden", "Haus & Garten", "Gartenpflege", "Rasen, Hecke, Außenbereich", "Haus & Garten", true),
-        new("furniture", "Möbelmontage", "Möbelmontage", "Schrank, Regal, Aufbau", "Reparatur & Montage", false),
-        new("other", "Weitere Services", "Sonstige Arbeiten", "Individuelle Unterstützung", "Weitere Services", false)
-    ];
-
-    private static async Task<IResult> ReadCatalog(ServiceDb db, string slug, CancellationToken ct) =>
-        await FindTenant(db, slug, ct) is null ? ApiProblem.NotFound() : Results.Ok(Catalog);
+    private static async Task<IResult> ReadCatalog(ServiceDb db, string slug, CancellationToken ct)
+    {
+        if (await FindTenant(db, slug, ct) is not { } tenant)
+            return ApiProblem.NotFound();
+        var policy = await ElectricalFeatures.LoadPolicy(db, tenant, ct);
+        var forms = ServiceForms.Read(tenant);
+        return Results.Ok(ElectricalFeatures.Services.Where(policy.Offered)
+            .Select(s => {
+                var form = forms.GetValueOrDefault(s.Id, ServiceForms.Empty);
+                return new { s.Id, s.Label, Title = s.Label, s.SearchTerms, Group = "Elektrotechnik",
+                    Form = form, FormVersion = ServiceForms.Version(form), Image = "/services/electric.webp", Featured = false };
+            }));
+    }
 
     private static bool ValidIntake(NewRequest body)
     {
         // Older clients can still create the earlier three-field request.
         if (body is { Category: null, Name: null, Phone: null, Photos: null })
             return true;
-        if (!Catalog.Any(x => x.Id == body.Category) || !Valid(body.Name, 120) || body.Name!.Trim().Length < 2 ||
+        if (body.Category is null || !Valid(body.Name, 120) || body.Name!.Trim().Length < 2 ||
             body.Name.Any(char.IsControl) || !Valid(body.Phone, 50) || body.Phone!.Trim().Length < 5 ||
             body.Phone.Count(char.IsAsciiDigit) < 5 || body.Phone.Any(c => !char.IsAsciiDigit(c) && !"+-()/ .".Contains(c)) ||
             body.Title.Trim().Length < 3 || body.Description.Trim().Length < 10 || body.Photos is { Length: > 3 })
@@ -81,10 +82,6 @@ public static partial class Endpoints
     }
 }
 
-public sealed record ServiceCategory(string Id, string Label, string Title, string SearchTerms, string Group, bool Featured)
-{
-    public string Image => $"/services/{Id}.webp";
-}
 public sealed record NewRequestPhoto(string Mime, byte[] Content);
 public sealed record PhotoScanJob(Guid RequestId, Guid PhotoId);
 

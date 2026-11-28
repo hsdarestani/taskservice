@@ -385,3 +385,27 @@ details summary {cursor:pointer;}
   .workspace.workspace-detail:not(.workspace-technician) .workspace-mobile-choose {display:none;}
   .workspace.workspace-detail:not(.workspace-technician) .workspace-sidebar {padding-bottom:12px;}
 }
+
+.feature-settings { margin-block: 1.5rem; }
+.feature-settings h3 { margin-bottom: .75rem; }
+.feature-search { display: flex; align-items: center; gap: .5rem; }
+.feature-search input { flex: 1; min-width: 0; }
+.feature-setting { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between; padding: .65rem 0; border-bottom: 1px solid var(--ts-border); }
+.feature-setting small { display: block; color: var(--ts-muted); }
+.feature-setting select { width: auto; min-height: 2.75rem; max-width: 100%; }
+.service-tile .electrical-symbol { flex-shrink: 0; width: 2.75rem; height: 2.75rem; margin: .45rem; padding: .6rem; border-radius: .5rem; background: #eaf2ff; color: #174e9f; }
+.policy-center { margin-top: 1.5rem; }
+.policy-center fieldset { min-width: 0; margin: 1rem 0; border: 1px solid var(--ts-border); border-radius: .5rem; padding: .75rem 1rem; }
+.policy-center legend { padding-inline: .35rem; font-weight: 600; }
+.policy-bulk { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.policy-center .policy-choice { display: flex; align-items: center; gap: .7rem; min-height: 2.75rem; margin: 0; border-top: 1px solid var(--ts-border); }
+.policy-choice input[type=checkbox] { flex: none; width: 1.1rem; height: 1.1rem; margin: 0; }
+.policy-center details { margin-top: 1rem; }
+.dispatch-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.dispatch-calendar h2 svg { vertical-align: middle; }
+.dispatch-calendar ul { padding: 0; list-style: none; }
+.dispatch-calendar li { display: grid; gap: .3rem; border-block-start: 1px solid var(--ts-border); padding-block: .85rem; }
+.dispatch-calendar li a { color: var(--blue); font-weight: 650; overflow-wrap: anywhere; }
+.service-form-editor { flex: 1 1 100%; min-width: 0; padding: 1rem; border: 1px solid var(--ts-border); border-radius: .5rem; }
+.service-form-editor fieldset { min-width: 0; margin-block: .75rem; border: 1px solid var(--ts-border); }
+.service-form-editor input[type=checkbox] { width: auto; }

@@ -14,7 +14,7 @@ from playwright.sync_api import expect, sync_playwright
 ORIGIN = "https://taskservice.smarbiz.sbs"
 TENANT = "/api/v1/tenants/demo"
 SECRET_DIR = Path(os.environ["TASKSERVICE_DEMO_QA_CREDENTIALS"])
-PHOTO = Path(__file__).resolve().parents[1] / "web/public/services/repair.webp"
+PHOTO = Path(__file__).resolve().parents[1] / "web/public/services/electric.webp"
 
 
 def code_at(secret):
@@ -116,8 +116,8 @@ def main():
         customer.get_by_role("button", name="Konto erstellen", exact=True).click()
         expect(customer.get_by_text("Wenn das Konto neu ist", exact=False)).to_be_visible()
         sign_in(customer, "/unternehmen/demo", email, password)
-        expect(customer.get_by_role("heading", name="Services für dein Zuhause")).to_be_visible()
-        customer.get_by_role("button", name="Reparaturen", exact=True).click()
+        expect(customer.get_by_role("heading", name="Elektroservice anfragen")).to_be_visible()
+        customer.get_by_role("button", name="Elektroinstallation", exact=True).click()
         form = customer.get_by_role("dialog")
         title = "Automatisierter Demovorgang " + nonce
         form.get_by_label("Titel deiner Anfrage").fill(title)

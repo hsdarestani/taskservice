@@ -11,7 +11,7 @@ export function sessionUrl(url: string): string {
 
 export type Session = { signedIn: boolean; csrfToken: string; native?: boolean; demo?: boolean;
   mailEnabled?: boolean; email?: string };
-export type Company = { intakeAvailable: boolean; slug: string; name: string; accent: string; role?: string; privacyNoticeUrl?: string };
+export type Company = { dispatchAvailable: boolean; intakeAvailable: boolean; slug: string; name: string; accent: string; role?: string; privacyNoticeUrl?: string };
 export type AppointmentView = {
   startsAt: string; endsAt: string; arrivalStatus: string; timeZone: string;
   updatedAt?: string; customerConfirmedAt?: string; customerNote?: string;

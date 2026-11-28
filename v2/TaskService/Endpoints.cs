@@ -27,6 +27,7 @@ public static partial class Endpoints
         group.MapGet("/requests/{id:guid}/photos/{photoId:guid}", DownloadPhoto);
         group.MapPost("/requests/{id:guid}/claim", ClaimRequest).RequireRateLimiting("guest");
         group.MapPost("/requests/{id:guid}/commands", Change);
+        group.MapGet("/dispatch", DispatchCalendar);
         group.MapGet("/technicians", Technicians);
         group.MapGet("/rooms/{channel}", Messages);
         group.MapPost("/rooms/{channel}", PostMessage);
@@ -72,7 +73,8 @@ public static partial class Endpoints
         await using var tx = await db.ForTenant(tenant.Id, ct);
         var actor = await Actor.Read(db, tenant, http, ct);
         var policy = await ElectricalFeatures.LoadPolicy(db, tenant, ct);
-        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, IntakeAvailable = policy.CanSubmit(null), Role = actor.Membership?.Role, PrivacyNoticeUrl = ReleaseGate.PrivacyNotice(config) });
+        return Results.Ok(new { tenant.Slug, tenant.Name, tenant.Accent, IntakeAvailable = policy.CanSubmit(null),
+            DispatchAvailable = (actor.IsCompany || actor.IsTechnician) && policy.Available(ElectricalFeatures.Dispatch, true), Role = actor.Membership?.Role, PrivacyNoticeUrl = ReleaseGate.PrivacyNotice(config) });
     }
 
     private static async Task<IResult> Requests(ServiceDb db, string slug, Guid? cursor, string? view, string? q, HttpContext http, CancellationToken ct)

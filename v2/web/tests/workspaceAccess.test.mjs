@@ -33,7 +33,7 @@ test('staff role cannot access another role’s workspace', () => {
 
 test('menus contain only capabilities authorized for that role', () => {
   const reviewer = navigationForRole('company', 'dispatcher');
-  assert.deepEqual(reviewer, ['overview', 'requests', 'technicians', 'conversations']);
+  assert.deepEqual(reviewer, ['overview', 'dispatch', 'requests', 'technicians', 'conversations']);
   assert.ok(!reviewer.includes('team'));
   assert.ok(!reviewer.includes('integrations'));
   const admin = navigationForRole('company', 'admin');

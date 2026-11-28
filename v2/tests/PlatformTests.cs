@@ -914,7 +914,7 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
             Assert.Equal(HttpStatusCode.Forbidden, (await lab.Post(unauthorized, path + "/commands", enable, revision: 1)).StatusCode);
         }
         var features = await owner.GetFromJsonAsync<JsonElement>(path + "/features");
-        Assert.Equal(19, features.GetProperty("items").GetArrayLength());
+        Assert.Equal(20, features.GetProperty("items").GetArrayLength());
         var form = new NewRequest("Wallbox installieren", "Angebot für die Montage einer Wallbox.", "qa@example.invalid",
             "wallbox", "Test Kunde", "+49 1234567", null);
         Assert.Equal(HttpStatusCode.Conflict, (await lab.Post(guest, tenant + "/requests", form)).StatusCode);
@@ -938,6 +938,49 @@ public sealed class PlatformTests(Lab lab) : IClassFixture<Lab>
         var audit = (await owner.GetFromJsonAsync<JsonElement>("/api/v1/platform/audit")).GetProperty("items");
         Assert.Equal(2, audit.EnumerateArray().Count(row => row.GetProperty("slug").GetString() == slug &&
             row.GetProperty("action").GetString() == "feature"));
+    }
+
+    [Fact]
+    public Task ElectricalUpgradePreservesHistoricalCategoriesAndRefusesLossyRollback() => MigrationChecks.ElectricalUpgradeAndRollback();
+
+    [Fact]
+    public async Task DispatchUsesBerlinBoundariesAndOnlyReturnsAuthorizedAssignments()
+    {
+        using var company = lab.Client("admin-a", mfa: true);
+        using var tech = lab.Client("tech-a");
+        using var otherTech = lab.Client("tech-chat");
+        using var customer = lab.Client("customer-a");
+        var id = await lab.Insert("assigned", lab.TechA);
+        await using var conn = new NpgsqlConnection(lab.Runtime);
+        await conn.OpenAsync();
+        await using (var tx = await conn.BeginTransactionAsync())
+        {
+            await Lab.Scope(conn, lab.TenantA);
+            await Lab.Execute(conn, $"""
+                INSERT INTO ts.appointments (tenant_id,id,request_id,technician_id,starts_at,ends_at,cancelled,arrival_status)
+                VALUES ('{lab.TenantA}',gen_random_uuid(),'{id}','{lab.TechA}','2030-03-30T22:55:00Z','2030-03-30T23:15:00Z',false,'planned')
+                """);
+            await tx.CommitAsync();
+        }
+        var path = lab.Base() + "/dispatch?date=2030-03-31";
+        foreach (var role in new[] { company, tech })
+        foreach (var view in new[] { "day", "week", "month" })
+        {
+            var page = await role.GetFromJsonAsync<JsonElement>(path + "&view=" + view);
+            Assert.Contains(page.GetProperty("items").EnumerateArray(), x => x.GetProperty("requestId").GetGuid() == id);
+        }
+        Assert.DoesNotContain(id.ToString(), await otherTech.GetStringAsync(path));
+        Assert.Equal(HttpStatusCode.Forbidden, (await customer.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await company.GetAsync(Lab.TenantUrl("other") + "/dispatch?date=2030-03-31")).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await tech.GetAsync(path + "&view=year")).StatusCode);
+        using var owner = lab.Client("platform-admin", mfa: true);
+        var registry = "/api/v1/platform/companies/lab/features";
+        var rev = (await owner.GetFromJsonAsync<JsonElement>(registry)).GetProperty("revision").GetInt32();
+        Task<HttpResponseMessage> Set(string state, int revision) => lab.Post(owner, "/api/v1/platform/companies/lab/commands",
+            new { action = "feature", feature = new { key = ElectricalFeatures.Dispatch, state } }, revision: revision);
+        Assert.Equal(HttpStatusCode.OK, (await Set("disabled", rev)).StatusCode);
+        try { Assert.Equal(HttpStatusCode.NotFound, (await tech.GetAsync(path)).StatusCode); }
+        finally { Assert.Equal(HttpStatusCode.OK, (await Set("default", rev + 1)).StatusCode); }
     }
 
     [Fact]

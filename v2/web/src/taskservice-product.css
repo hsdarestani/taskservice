@@ -401,3 +401,8 @@ details summary {cursor:pointer;}
 .policy-center .policy-choice { display: flex; align-items: center; gap: .7rem; min-height: 2.75rem; margin: 0; border-top: 1px solid var(--ts-border); }
 .policy-choice input[type=checkbox] { flex: none; width: 1.1rem; height: 1.1rem; margin: 0; }
 .policy-center details { margin-top: 1rem; }
+.dispatch-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.dispatch-calendar h2 svg { vertical-align: middle; }
+.dispatch-calendar ul { padding: 0; list-style: none; }
+.dispatch-calendar li { display: grid; gap: .3rem; border-block-start: 1px solid var(--ts-border); padding-block: .85rem; }
+.dispatch-calendar li a { color: var(--blue); font-weight: 650; overflow-wrap: anywhere; }

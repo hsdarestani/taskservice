@@ -11,6 +11,7 @@ public sealed record ElectricalService(string Id, string Label, string English, 
 
 public static class ElectricalFeatures
 {
+    public const string Dispatch = "dispatch.calendar";
     public const string Intake = "requests.intake";
     public static IReadOnlyList<ElectricalService> Services { get; } = [
         new("installation", "Elektroinstallation", "Electrical installation", "Steckdose Leitung Neubau", true),
@@ -33,7 +34,13 @@ public static class ElectricalFeatures
         new("residential", "Wohngebäudeinstallation", "Residential electrical services", "Wohnung Wohnhaus", false)
     ];
 
-    public static bool IsKnown(string key) => key == Intake || Services.Any(x => x.Key == key);
+    public static IReadOnlyList<FeatureDefinition> Registry { get; } = [
+        new(Intake, "Kundenanfragen", "Customer intake", true),
+        new(Dispatch, "Einsatzkalender", "Dispatch calendar", true),
+        .. Services.Select(s => new FeatureDefinition(s.Key, s.Label, s.English, s.DefaultEnabled, Intake))
+    ];
+
+    public static bool IsKnown(string key) => Registry.Any(x => x.Key == key);
 
     public static bool Configured(Tenant tenant, string key, bool fallback) =>
         tenant.FeatureOverrides.Contains("+" + key) || (!tenant.FeatureOverrides.Contains("-" + key) && fallback);
@@ -51,6 +58,8 @@ public static class ElectricalFeatures
         "garden" => "Haus & Garten", "furniture" => "Möbelmontage", "other" => "Weitere Services", _ => id
     };
 }
+
+public sealed record FeatureDefinition(string Key, string Label, string English, bool DefaultEnabled, string? Parent = null);
 
 public sealed record FeaturePolicy(Tenant Tenant, string[] GloballyDisabled, string[] Unlicensed)
 {

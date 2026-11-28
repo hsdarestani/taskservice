@@ -9,6 +9,7 @@ import { CustomerHeader, CustomerHome, CustomerNav, Wordmark } from './CustomerP
 import type { ServiceCategory } from './CustomerPortal';
 import { useLoad } from './useLoad';
 import { navigationForRole, resolveWorkspaceAccess } from './workspaceAccess';
+import { DispatchCalendar } from './DispatchCalendar';
 import { PolicyCenter, plans } from './PolicyCenter';
 import { CompanyFeatures } from './CompanyFeatures';
 import { NativeLogin } from './NativeLogin';
@@ -133,7 +134,7 @@ const workspaceLabels = { platform: 'Plattformverwaltung', company: 'Servicebetr
 const workspaceMenus = {
   platform: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard },
     { name: 'Unternehmen', id: 'companies', icon: Building2 }, { name: 'Funktionsverwaltung', id: 'features', icon: Plug }, { name: 'Änderungsprotokoll', id: 'audit', icon: ShieldCheck }],
-  company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
+  company: [{ name: 'Übersicht', id: 'overview', icon: LayoutDashboard }, { name: 'Disposition', id: 'dispatch', icon: CalendarDays }, { name: 'Servicevorgänge', id: 'requests', icon: ClipboardList },
     { name: 'Techniker', id: 'technicians', icon: UsersRound }, { name: 'Team und Rechte', id: 'team', icon: ShieldCheck },
     { name: 'Integrationen', id: 'integrations', icon: Plug },
     { name: 'Unternehmenschat', id: 'conversations', icon: MessagesSquare }],
@@ -172,7 +173,8 @@ function Workspace({ portal, company, signedIn, logout, children }: {
 }) {
   const root = portal === 'platform' ? '/plattform' : base + (portal === 'technician' ? '/technik' : '/betrieb');
   const permitted = navigationForRole(portal, company?.role);
-  const menu = workspaceMenus[portal].filter(item => permitted.includes(item.id));
+  const menu = workspaceMenus[portal].filter(item => permitted.includes(item.id) &&
+    (!['dispatch', 'schedule'].includes(item.id) || company?.dispatchAvailable));
   const defaultSection = menu[0].id;
   const [hash, setHash] = useState(location.hash.slice(1) || defaultSection);
   const activeSection = menu.some(item => item.id === hash) ? hash : defaultSection;
@@ -407,7 +409,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
   const section = useContext(WorkspaceSectionContext);
   const isCompany = portal === 'company';
   const showRequests = section === 'requests' || (isCompany && section === 'overview');
-  const showSchedule = !isCompany && section === 'schedule';
+  const showSchedule = company.dispatchAvailable && (section === 'schedule' || section === 'dispatch');
   const showMetrics = (isCompany && section === 'overview') || (!isCompany && section === 'requests');
   const allowed = isCompany ? company.role === 'admin' || company.role === 'dispatcher' : company.role === 'technician';
   const [cursor, setCursor] = useState('');
@@ -415,7 +417,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState(isCompany ? 'recent' : 'appointment');
-  const list = useLoad<RequestPage>(session.signedIn && allowed && (showRequests || showSchedule) ? api + '/requests?view=staff'
+  const list = useLoad<RequestPage>(session.signedIn && allowed && showRequests ? api + '/requests?view=staff'
     + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') + (query ? '&q=' + encodeURIComponent(query) : '') : undefined);
   const technicians = useLoad<{ id: string; name: string }[]>(session.signedIn && allowed && isCompany && section === 'technicians' ? api + '/technicians' : undefined);
   const result = list.data?.items ?? [];
@@ -434,7 +436,7 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
   return <>
     <div className="workspace-heading"><p className="eyebrow">{company.name}</p>
       <h1>{isCompany ? ({
-        overview: 'Serviceübersicht', requests: 'Servicevorgänge', technicians: 'Techniker',
+        overview: 'Serviceübersicht', dispatch: 'Disposition', requests: 'Servicevorgänge', technicians: 'Techniker',
         team: 'Team und Rechte', integrations: 'Integrationen', conversations: 'Unternehmenschat',
       } as Record<string,string>)[section] || 'Servicebetrieb'
         : ({ requests: 'Meine Einsätze', schedule: 'Tagesplan', conversations: 'Teamchat' } as Record<string,string>)[section] || 'Technik'}</h1>
@@ -446,11 +448,8 @@ function Dashboard({ company, session, portal }: { company: Company; session: Se
       <div><CalendarDays aria-hidden/><span>Heute geplant</span><strong>{daily.length}</strong></div>
       <div><Activity aria-hidden/><span>In Arbeit</span><strong>{result.filter(r => r.state === 'in_progress').length}</strong></div>
     </div>}
-    {showSchedule && <section id="schedule" className="panel day-plan"><h2>Tagesplan</h2>
-      {daily.length === 0 && <p className="muted">Heute sind in dieser Ansicht keine Termine geplant.</p>}
-      <ol>{daily.map(row => <li key={row.id}><time dateTime={row.appointment!.startsAt}>{berlinTime(row.appointment!.startsAt)}</time>
-        <a href={detailPath(row)}>{row.title}<small>Bis {berlinTime(row.appointment!.endsAt)} Uhr</small></a></li>)}</ol>
-    </section>}
+    {showSchedule && <DispatchCalendar api={api} technician={!isCompany}
+      detailBase={base + (isCompany ? '/betrieb' : '/technik') + '/anfragen/'}/>}
     {showRequests && <section id="requests" className="panel operations-list">
       <div className="section-line"><h2>{isCompany ? 'Servicevorgänge' : 'Zugewiesene Aufträge'}</h2></div>
       <form className="workspace-filters" onSubmit={e => {e.preventDefault(); setCursor(''); setFilter(''); setQuery(search.trim());}}>

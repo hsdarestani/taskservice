@@ -24,9 +24,7 @@ public static partial class Endpoints
                 policy.Available(key, defaultEnabled) && (parent is null || policy.IntakeEnabled), parent,
                 policy.GloballyDisabled.Contains(key), policy.Unlicensed.Contains(key));
         }
-        var items = ElectricalFeatures.Services.Select(s =>
-            Describe(s.Key, s.Label, s.English, s.DefaultEnabled, ElectricalFeatures.Intake))
-            .Prepend(Describe(ElectricalFeatures.Intake, "Kundenanfragen", "Customer intake", true, null));
+        var items = ElectricalFeatures.Registry.Select(f => Describe(f.Key, f.Label, f.English, f.DefaultEnabled, f.Parent));
         return Results.Ok(new { tenant.Revision, Items = items });
     }
 

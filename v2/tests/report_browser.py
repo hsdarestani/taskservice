@@ -227,6 +227,12 @@ with sync_playwright() as playwright:
     send_request_command(page, "schedule")
     show_tab(page, "overview")
     expect(page.get_by_text("Bitte den Eingang freihalten.", exact=True)).to_be_visible()
+    page.goto(origin + "/unternehmen/lab/betrieb#dispatch")
+    page.get_by_label("Datum", exact=True).fill(str(day))
+    for mode in ("day", "week", "month"):
+        page.get_by_label("Zeitraum").select_option(mode)
+        expect(page.locator('.dispatch-calendar a[href$="' + os.environ["TASKSERVICE_BROWSER_REQUEST"] + '"]')).to_be_visible()
+    page.screenshot(path=output / "dispatch-calendar.png")
     context.close()
 
     context, page, panel = open_as("customer-a", mobile=True, tab="actions")

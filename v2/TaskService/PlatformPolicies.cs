@@ -22,8 +22,7 @@ public static partial class Endpoints
         var history = await db.Set<FeaturePolicyHistory>().Where(h => h.Scope == scope)
             .OrderByDescending(h => h.Revision).Take(20).ToArrayAsync(ct);
         return Results.Ok(new { plan.Revision, plan.Withheld, History = history,
-            Features = ElectricalFeatures.Services.Select(s => new { s.Key, s.Label })
-                .Prepend(new { Key = ElectricalFeatures.Intake, Label = "Kundenanfragen" }) });
+            Features = ElectricalFeatures.Registry.Select(s => new { s.Key, s.Label }) });
     }
 
     private static async Task<IResult> SavePolicy(string scope, PolicyUpdate body, HttpContext http, IConfiguration config, CancellationToken ct)
@@ -32,7 +31,7 @@ public static partial class Endpoints
             return ApiProblem.Denied();
         if (!PlanScopes.Contains(scope))
             return ApiProblem.NotFound();
-        if (body.Withheld is not { } input || input.Length > ElectricalFeatures.Services.Count + 1 ||
+        if (body.Withheld is not { } input || input.Length > ElectricalFeatures.Registry.Count ||
             input.Any(key => key is null || !ElectricalFeatures.IsKnown(key)) || input.Distinct().Count() != input.Length)
             return ApiProblem.Error(422, "invalid_policy", "Die Funktionsauswahl ist ungültig.");
         var withheld = input.Order(StringComparer.Ordinal).ToArray();
